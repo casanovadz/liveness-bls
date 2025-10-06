@@ -20,7 +20,6 @@ const PORT = process.env.PORT || 3000;
 
 // Middleware
 app.use(cors({
-<<<<<<< HEAD
     origin: '*',
     methods: ['GET', 'POST', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization']
@@ -32,7 +31,6 @@ app.use(cors({
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
-<<<<<<< HEAD
 // قاعدة بيانات SQLite
 const dbPath = path.join(__dirname, 'liveness.db');
 const db = new sqlite3.Database(dbPath, (err) => {
