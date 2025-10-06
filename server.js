@@ -1,3 +1,14 @@
+// إصلاح CORS في الخادم
+app.use(cors({
+    origin: ['https://algeria.blsspainglobal.com', 'chrome-extension://*'],
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true
+}));
+
+// معالجة طلبات OPTIONS
+app.options('*', cors());
+
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
