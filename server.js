@@ -1,14 +1,3 @@
-// إصلاح CORS في الخادم
-app.use(cors({
-    origin: ['https://algeria.blsspainglobal.com', 'chrome-extension://*'],
-    methods: ['GET', 'POST', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-    credentials: true
-}));
-
-// معالجة طلبات OPTIONS
-app.options('*', cors());
-
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
@@ -23,10 +12,6 @@ app.use(cors({
     origin: '*',
     methods: ['GET', 'POST', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization']
-=======
-  origin: '*',
-  methods: ['GET', 'POST'],
-  credentials: true
 }));
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
@@ -40,9 +25,6 @@ const db = new sqlite3.Database(dbPath, (err) => {
         console.log('✅ Connected to SQLite database');
     }
 });
-=======
-// استخدم قاعدة بيانات ملف بدلاً من الذاكرة
-const db = new sqlite3.Database('./liveness.db');
 
 // إنشاء الجداول
 db.serialize(() => {
@@ -158,17 +140,4 @@ app.listen(PORT, () => {
     console.log(`🚀 Liveness BLS Server running on port ${PORT}`);
     console.log(`📍 Health: https://liveness-bls.onrender.com/health`);
     console.log(`📍 Retrieve: https://liveness-bls.onrender.com/retrieve_data.php?user_id=test123`);
-});
-=======
-  console.log(`🚀 Liveness BLS Server running on port ${PORT}`);
-  console.log(`📍 Health check: https://liveness-bls.onrender.com/health`);
-});
-
-// معالجة الأخطاء غير الملتقطة
-process.on('uncaughtException', (error) => {
-  console.error('Uncaught Exception:', error);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
