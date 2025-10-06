@@ -28,7 +28,6 @@ app.use(cors({
   origin: '*',
   methods: ['GET', 'POST'],
   credentials: true
->>>>>>> 17582729e38081aaf71bfb6fcea4c7f3738cc386
 }));
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
@@ -46,7 +45,6 @@ const db = new sqlite3.Database(dbPath, (err) => {
 =======
 // استخدم قاعدة بيانات ملف بدلاً من الذاكرة
 const db = new sqlite3.Database('./liveness.db');
->>>>>>> 17582729e38081aaf71bfb6fcea4c7f3738cc386
 
 // إنشاء الجداول
 db.serialize(() => {
@@ -159,7 +157,6 @@ setInterval(() => {
 }, 3600000);
 
 app.listen(PORT, () => {
-<<<<<<< HEAD
     console.log(`🚀 Liveness BLS Server running on port ${PORT}`);
     console.log(`📍 Health: https://liveness-bls.onrender.com/health`);
     console.log(`📍 Retrieve: https://liveness-bls.onrender.com/retrieve_data.php?user_id=test123`);
@@ -177,4 +174,3 @@ process.on('uncaughtException', (error) => {
 process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
->>>>>>> 17582729e38081aaf71bfb6fcea4c7f3738cc386
