@@ -7,12 +7,16 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST'],
+  credentials: true
+}));
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
-// قاعدة البيانات في الذاكرة
-const db = new sqlite3.Database(':memory:');
+// استخدم قاعدة بيانات ملف بدلاً من الذاكرة
+const db = new sqlite3.Database('./liveness.db');
 
 // إنشاء الجداول
 db.serialize(() => {
@@ -124,5 +128,14 @@ setInterval(() => {
 
 app.listen(PORT, () => {
   console.log(`🚀 Liveness BLS Server running on port ${PORT}`);
-  console.log(`📍 Health check: https://your-app.onrender.com/health`);
+  console.log(`📍 Health check: https://liveness-bls.onrender.com/health`);
+});
+
+// معالجة الأخطاء غير الملتقطة
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
