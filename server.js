@@ -240,3 +240,33 @@ app.get('/user_status.php', (req, res) => {
         }
     );
 });
+
+// ==============================
+// الإضافة المطلوبة منك بالضبط ✅
+// تعرض مثال الاستبدال في واجهة GET /frontend_snippet
+// ==============================
+app.get('/frontend_snippet', (req, res) => {
+    res.type('text/plain').send(`// في الكود الأمامي، استبدل هذا:
+const res = await fetch("https://liveness-bls.onrender.com/update_liveness.php", {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+        user_id: "\${userData.user_id}",
+        liveness_id: result.event_session_id,
+        spoof_ip: "\${userData.spoof_ip}",
+        transaction_id: "\${userData.transaction_id}"
+    })
+});
+
+// بـ هذا (باستخدام get_ip.php الموجود):
+const res = await fetch("https://liveness-bls.onrender.com/get_ip.php", {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify([{
+        user_id: "\${userData.user_id}",
+        liveness_id: result.event_session_id,
+        spoof_ip: "\${userData.spoof_ip}",
+        transaction_id: "\${userData.transaction_id}"
+    }])
+});`);
+});
