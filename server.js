@@ -141,3 +141,102 @@ app.listen(PORT, () => {
     console.log(`📍 Health: https://liveness-bls.onrender.com/health`);
     console.log(`📍 Retrieve: https://liveness-bls.onrender.com/retrieve_data.php?user_id=test123`);
 });
+
+// 4. endpoint لـ update_liveness.php (لنتائج التحقق من الهوية)
+app.post('/update_liveness.php', (req, res) => {
+    const { user_id, liveness_id, spoof_ip, transaction_id } = req.body;
+    
+    console.log('📥 POST /update_liveness.php', req.body);
+    
+    // التحقق من البيانات المطلوبة
+    if (!user_id || !liveness_id || !transaction_id) {
+        return res.status(400).json({
+            success: false,
+            message: 'بيانات ناقصة: user_id, liveness_id, transaction_id مطلوبة'
+        });
+    }
+    
+    // تحديث البيانات في قاعدة البيانات
+    db.run(
+        `UPDATE liveness_data 
+         SET liveness_id = ?, status = 'completed', spoof_ip = COALESCE(?, spoof_ip)
+         WHERE user_id = ? AND transaction_id = ?`,
+        [liveness_id, spoof_ip, user_id, transaction_id],
+        function(err) {
+            if (err) {
+                console.error('❌ Database error:', err);
+                return res.status(500).json({
+                    success: false,
+                    message: 'خطأ في قاعدة البيانات: ' + err.message
+                });
+            }
+            
+            if (this.changes === 0) {
+                // إذا لم يتم العثور على السجل، قم بإنشائه
+                db.run(
+                    `INSERT INTO liveness_data 
+                     (user_id, transaction_id, liveness_id, spoof_ip, status) 
+                     VALUES (?, ?, ?, ?, 'completed')`,
+                    [user_id, transaction_id, liveness_id, spoof_ip],
+                    function(insertErr) {
+                        if (insertErr) {
+                            console.error('❌ Insert error:', insertErr);
+                            return res.status(500).json({
+                                success: false,
+                                message: 'خطأ في إنشاء السجل: ' + insertErr.message
+                            });
+                        }
+                        
+                        console.log('✅ New record created - ID:', this.lastID);
+                        res.json({
+                            success: true,
+                            message: 'تم حفظ نتائج التحقق بنجاح',
+                            id: this.lastID,
+                            status: 'completed'
+                        });
+                    }
+                );
+            } else {
+                console.log('✅ Liveness results updated - changes:', this.changes);
+                res.json({
+                    success: true,
+                    message: 'تم تحديث نتائج التحقق بنجاح',
+                    changes: this.changes,
+                    status: 'completed'
+                });
+            }
+        }
+    );
+});
+
+// 5. endpoint للحصول على حالة المستخدم
+app.get('/user_status.php', (req, res) => {
+    const userId = req.query.user_id;
+    
+    if (!userId) {
+        return res.status(400).json({ error: 'user_id parameter is required' });
+    }
+    
+    db.get(
+        "SELECT user_id, transaction_id, spoof_ip, status, created_at FROM liveness_data WHERE user_id = ? ORDER BY created_at DESC LIMIT 1",
+        [userId],
+        (err, row) => {
+            if (err) {
+                console.error('❌ Database error:', err);
+                return res.status(500).json({ error: err.message });
+            }
+            
+            if (row) {
+                res.json({
+                    success: true,
+                    data: row
+                });
+            } else {
+                res.json({
+                    success: false,
+                    message: 'لم يتم العثور على بيانات للمستخدم'
+                });
+            }
+        }
+    );
+});
