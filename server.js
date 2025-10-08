@@ -70,7 +70,7 @@ app.get('/', (req, res) => {
   });
 });
 
-// 1. استرجاع البيانات أو إنشاؤها تلقائيًا
+// 1. استرجاع البيانات أو إنشاؤها تلقائيًا (مع إيقاف بعد 5 دقائق أو اكتمال العملية)
 app.get('/retrieve_data.php', (req, res) => {
   const userId = req.query.user_id;
   console.log('📥 GET /retrieve_data.php?user_id=', userId);
@@ -79,13 +79,14 @@ app.get('/retrieve_data.php', (req, res) => {
     return res.status(400).json({ error: 'user_id parameter is required' });
   }
 
-  db.all("SELECT * FROM liveness_data WHERE user_id = ?", [userId], (err, rows) => {
+  db.get("SELECT * FROM liveness_data WHERE user_id = ?", [userId], (err, row) => {
     if (err) {
       console.error('❌ Database error:', err);
       return res.status(500).json({ error: err.message });
     }
 
-    if (rows.length === 0) {
+    // 🆕 لو لم توجد بيانات، أنشئ سجل جديد بحالة pending
+    if (!row) {
       db.run(
         `INSERT INTO liveness_data (user_id, transaction_id, liveness_id, spoof_ip, status, created_at)
          VALUES (?, ?, ?, ?, ?, datetime('now'))`,
@@ -96,18 +97,38 @@ app.get('/retrieve_data.php', (req, res) => {
             return res.status(500).json({ error: insertErr.message });
           }
           console.log(`🆕 Created new pending record for user_id: ${userId}`);
-          db.all("SELECT * FROM liveness_data WHERE user_id = ?", [userId], (e2, newRows) => {
-            if (e2) return res.status(500).json({ error: e2.message });
-            res.json(newRows);
-          });
+          return res.json([{ user_id: userId, status: 'pending' }]);
         }
       );
-    } else {
-      console.log('✅ Data retrieved:', rows.length, 'records for', userId);
-      res.json(rows);
+      return;
     }
+
+    // 🕒 حساب المدة منذ الإنشاء
+    const createdAt = new Date(row.created_at);
+    const elapsedMinutes = (Date.now() - createdAt.getTime()) / 60000;
+
+    // ✅ إذا كانت العملية مكتملة — أوقف polling نهائيًا
+    if (row.status === 'completed') {
+      console.log(`✅ ${userId} completed — stop polling.`);
+      return res.json({ stop: true, status: 'completed' });
+    }
+
+    // ⏰ إذا تجاوزت المدة 5 دقائق — أوقف polling أيضًا
+    if (elapsedMinutes > 5) {
+      console.log(`⏰ Timeout reached for ${userId} (${elapsedMinutes.toFixed(1)} min).`);
+      db.run(
+        "UPDATE liveness_data SET status = 'timeout' WHERE user_id = ?",
+        [userId]
+      );
+      return res.json({ stop: true, status: 'timeout' });
+    }
+
+    // ⏳ إذا ما زالت العملية جارية
+    console.log(`⏳ Still pending for ${userId} (${elapsedMinutes.toFixed(1)} min).`);
+    return res.json([{ user_id: row.user_id, status: row.status }]);
   });
 });
+
 
 // 2. تخزين أو تحديث بيانات IP المزيف + إرجاع رابط مباشر للعميل
 app.post('/get_ip.php', (req, res) => {
