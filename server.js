@@ -1,4 +1,4 @@
-// server.js — الإصدار النهائي (مع تنظيف السجلات pending بعد 10 دقائق)
+// server.js — كامل ومصحح
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
@@ -9,11 +9,15 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // ---------- Middleware ----------
+// قراءة JSON و urlencoded
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// body-parser (اختياري لأن express.json يقوم بالمطلوب، لكن نتركه متوافقاً)
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
+// إعداد CORS: اسمح بالترويسات التي تحتاجها (بما فيها Cache-Control)
 const allowedHeaders = [
   'Content-Type',
   'Authorization',
@@ -29,6 +33,7 @@ app.use(cors({
   credentials: true
 }));
 
+// معالجة preflight لجميع المسارات
 app.options('*', (req, res) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
@@ -37,12 +42,17 @@ app.options('*', (req, res) => {
 });
 
 // ---------- قاعدة البيانات ----------
+// مسار قاعدة البيانات
 const dbPath = path.join(__dirname, 'liveness.db');
 const db = new sqlite3.Database(dbPath, (err) => {
-  if (err) console.error('❌ Error opening database:', err);
-  else console.log('✅ Connected to SQLite database');
+  if (err) {
+    console.error('❌ Error opening database:', err);
+  } else {
+    console.log('✅ Connected to SQLite database');
+  }
 });
 
+// إنشاء الجدول إذا لم يكن موجودًا
 db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS liveness_data (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -61,7 +71,7 @@ db.serialize(() => {
 
 // ---------- Endpoints ----------
 
-// 0. الصفحة الرئيسية
+// 0. صفحة رئيسية
 app.get('/', (req, res) => {
   res.json({
     message: 'Liveness BLS Server is running',
@@ -70,7 +80,7 @@ app.get('/', (req, res) => {
   });
 });
 
-// 1. استرجاع البيانات أو إنشاؤها تلقائيًا (مع إيقاف بعد 5 دقائق أو اكتمال العملية)
+// 1. استرجاع البيانات بواسطة user_id
 app.get('/retrieve_data.php', (req, res) => {
   const userId = req.query.user_id;
   console.log('📥 GET /retrieve_data.php?user_id=', userId);
@@ -79,58 +89,17 @@ app.get('/retrieve_data.php', (req, res) => {
     return res.status(400).json({ error: 'user_id parameter is required' });
   }
 
-  db.get("SELECT * FROM liveness_data WHERE user_id = ?", [userId], (err, row) => {
+  db.all("SELECT * FROM liveness_data WHERE user_id = ?", [userId], (err, rows) => {
     if (err) {
       console.error('❌ Database error:', err);
       return res.status(500).json({ error: err.message });
     }
-
-    // 🆕 لو لم توجد بيانات، أنشئ سجل جديد بحالة pending
-    if (!row) {
-      db.run(
-        `INSERT INTO liveness_data (user_id, transaction_id, liveness_id, spoof_ip, status, created_at)
-         VALUES (?, ?, ?, ?, ?, datetime('now'))`,
-        [userId, 'tx-auto', 'lv-auto', '0.0.0.0', 'pending'],
-        function (insertErr) {
-          if (insertErr) {
-            console.error('❌ Insert error:', insertErr);
-            return res.status(500).json({ error: insertErr.message });
-          }
-          console.log(`🆕 Created new pending record for user_id: ${userId}`);
-          return res.json([{ user_id: userId, status: 'pending' }]);
-        }
-      );
-      return;
-    }
-
-    // 🕒 حساب المدة منذ الإنشاء
-    const createdAt = new Date(row.created_at);
-    const elapsedMinutes = (Date.now() - createdAt.getTime()) / 60000;
-
-    // ✅ إذا كانت العملية مكتملة — أوقف polling نهائيًا
-    if (row.status === 'completed') {
-      console.log(`✅ ${userId} completed — stop polling.`);
-      return res.json({ stop: true, status: 'completed' });
-    }
-
-    // ⏰ إذا تجاوزت المدة 5 دقائق — أوقف polling أيضًا
-    if (elapsedMinutes > 5) {
-      console.log(`⏰ Timeout reached for ${userId} (${elapsedMinutes.toFixed(1)} min).`);
-      db.run(
-        "UPDATE liveness_data SET status = 'timeout' WHERE user_id = ?",
-        [userId]
-      );
-      return res.json({ stop: true, status: 'timeout' });
-    }
-
-    // ⏳ إذا ما زالت العملية جارية
-    console.log(`⏳ Still pending for ${userId} (${elapsedMinutes.toFixed(1)} min).`);
-    return res.json([{ user_id: row.user_id, status: row.status }]);
+    console.log('✅ Data retrieved:', rows.length, 'records for', userId);
+    res.json(rows);
   });
 });
 
-
-// 2. تخزين أو تحديث بيانات IP المزيف + إرجاع رابط مباشر للعميل
+// 2. تخزين بيانات IP المزيف — يتلقى Array (كما طلبت)
 app.post('/get_ip.php', (req, res) => {
   const data = req.body;
   console.log('📤 POST /get_ip.php', data);
@@ -146,68 +115,32 @@ app.post('/get_ip.php', (req, res) => {
     return res.status(400).json({ error: 'Missing required fields' });
   }
 
-  db.get("SELECT id FROM liveness_data WHERE user_id = ?", [user_id], (err, row) => {
-    if (err) {
-      console.error('❌ Database error:', err);
-      return res.status(500).json({ error: err.message });
+  db.run(
+    `INSERT OR REPLACE INTO liveness_data 
+     (user_id, transaction_id, liveness_id, spoof_ip, status, created_at)
+     VALUES (?, ?, ?, ?, COALESCE((SELECT status FROM liveness_data WHERE user_id = ?), 'pending'), datetime('now'))`,
+    [user_id, transaction_id, liveness_id, spoof_ip, user_id],
+    function(err) {
+      if (err) {
+        console.error('❌ Database error:', err);
+        return res.status(500).json({ error: err.message });
+      }
+      console.log('✅ Data stored - ID:', this.lastID, 'user_id=', user_id);
+      res.json({
+        success: true,
+        message: 'Spoof IP data stored successfully',
+        id: this.lastID
+      });
     }
-
-    const selfieLink = `https://algeria.blsspainglobal.com/assets/images/logo.png?user_id=${encodeURIComponent(user_id)}`;
-
-    if (row) {
-      db.run(
-        `UPDATE liveness_data
-         SET transaction_id = ?, liveness_id = ?, spoof_ip = ?, status = 'updated', created_at = datetime('now')
-         WHERE user_id = ?`,
-        [transaction_id, liveness_id, spoof_ip, user_id],
-        function (updateErr) {
-          if (updateErr) {
-            console.error('❌ Update error:', updateErr);
-            return res.status(500).json({ error: updateErr.message });
-          }
-          console.log(`🔄 Updated record for user_id: ${user_id}`);
-          res.json({
-            success: true,
-            message: 'Spoof IP data updated successfully',
-            user_id,
-            transaction_id,
-            liveness_id,
-            link: selfieLink
-          });
-        }
-      );
-    } else {
-      db.run(
-        `INSERT INTO liveness_data (user_id, transaction_id, liveness_id, spoof_ip, status, created_at)
-         VALUES (?, ?, ?, ?, 'pending', datetime('now'))`,
-        [user_id, transaction_id, liveness_id, spoof_ip],
-        function (insertErr) {
-          if (insertErr) {
-            console.error('❌ Insert error:', insertErr);
-            return res.status(500).json({ error: insertErr.message });
-          }
-          console.log('✅ New data stored - ID:', this.lastID, 'user_id=', user_id);
-          res.json({
-            success: true,
-            message: 'Spoof IP data stored successfully',
-            user_id,
-            transaction_id,
-            liveness_id,
-            link: selfieLink
-          });
-        }
-      );
-    }
-  });
+  );
 });
 
-
-// 3. Health check
+// 3. Health check endpoint
 app.get('/health', (req, res) => {
   res.json({
     status: 'OK',
     server: 'liveness-bls.uk',
-    version: '2.1',
+    version: '2.0',
     timestamp: new Date().toISOString(),
     endpoints: {
       retrieve_data: 'GET /retrieve_data.php?user_id=USER_ID',
@@ -216,7 +149,7 @@ app.get('/health', (req, res) => {
   });
 });
 
-// 4. تحديث نتائج التحقق
+// 4. تحديث نتائج التحقق (update_liveness.php)
 app.post('/update_liveness.php', (req, res) => {
   const { user_id, liveness_id, spoof_ip, transaction_id } = req.body;
   console.log('📥 POST /update_liveness.php', req.body);
@@ -233,21 +166,23 @@ app.post('/update_liveness.php', (req, res) => {
      SET liveness_id = ?, status = 'completed', spoof_ip = COALESCE(?, spoof_ip)
      WHERE user_id = ? AND transaction_id = ?`,
     [liveness_id, spoof_ip, user_id, transaction_id],
-    function (err) {
+    function(err) {
       if (err) {
         console.error('❌ Database error:', err);
-        return res.status(500).json({ success: false, message: err.message });
+        return res.status(500).json({ success: false, message: 'خطأ في قاعدة البيانات: ' + err.message });
       }
 
       if (this.changes === 0) {
+        // إن لم يوجد سجل — أنشئه
         db.run(
-          `INSERT INTO liveness_data (user_id, transaction_id, liveness_id, spoof_ip, status, created_at)
+          `INSERT INTO liveness_data 
+           (user_id, transaction_id, liveness_id, spoof_ip, status, created_at)
            VALUES (?, ?, ?, ?, 'completed', datetime('now'))`,
           [user_id, transaction_id, liveness_id, spoof_ip],
-          function (insertErr) {
+          function(insertErr) {
             if (insertErr) {
               console.error('❌ Insert error:', insertErr);
-              return res.status(500).json({ success: false, message: insertErr.message });
+              return res.status(500).json({ success: false, message: 'خطأ في إنشاء السجل: ' + insertErr.message });
             }
             console.log('✅ New record created - ID:', this.lastID);
             res.json({ success: true, message: 'تم حفظ نتائج التحقق بنجاح', id: this.lastID, status: 'completed' });
@@ -261,7 +196,7 @@ app.post('/update_liveness.php', (req, res) => {
   );
 });
 
-// 5. حالة المستخدم
+// 5. الحصول على حالة المستخدم
 app.get('/user_status.php', (req, res) => {
   const userId = req.query.user_id;
   if (!userId) return res.status(400).json({ error: 'user_id parameter is required' });
@@ -270,14 +205,32 @@ app.get('/user_status.php', (req, res) => {
     "SELECT user_id, transaction_id, spoof_ip, status, created_at FROM liveness_data WHERE user_id = ? ORDER BY created_at DESC LIMIT 1",
     [userId],
     (err, row) => {
-      if (err) return res.status(500).json({ error: err.message });
+      if (err) {
+        console.error('❌ Database error:', err);
+        return res.status(500).json({ error: err.message });
+      }
       if (row) res.json({ success: true, data: row });
       else res.json({ success: false, message: 'لم يتم العثور على بيانات للمستخدم' });
     }
   );
 });
 
-// 6. Debug endpoint
+// 6. frontend_snippet (عرض مثال التبديل)
+app.get('/frontend_snippet', (req, res) => {
+  res.type('text/plain').send(`// قم باستبدال update_liveness.php بالاستدعاء إلى get_ip.php (array)
+const res = await fetch("https://liveness-bls.onrender.com/get_ip.php", {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify([{
+    user_id: "\${userData.user_id}",
+    liveness_id: result.event_session_id,
+    spoof_ip: "\${userData.spoof_ip}",
+    transaction_id: "\${userData.transaction_id}"
+  }])
+});`);
+});
+
+// 7. Temporary debug endpoint — قم بإزالته أو حمايته لاحقًا
 app.get('/debug_all', (req, res) => {
   db.all("SELECT * FROM liveness_data ORDER BY created_at DESC LIMIT 500", [], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
@@ -285,23 +238,17 @@ app.get('/debug_all', (req, res) => {
   });
 });
 
-// ---------- تنظيف تلقائي ----------
+// تنظيف البيانات القديمة (كل ساعة)
 setInterval(() => {
-  // حذف كل السجلات الأقدم من ساعتين
   db.run("DELETE FROM liveness_data WHERE created_at < datetime('now', '-2 hours')", (err) => {
     if (err) console.error('❌ Error cleaning old data:', err);
-    else console.log('🧹 Deleted old (>2h) data');
+    else console.log('✅ Old data cleaned');
   });
+}, 3600000);
 
-  // حذف السجلات التي حالتها pending منذ أكثر من 10 دقائق
-  db.run("DELETE FROM liveness_data WHERE status = 'pending' AND created_at < datetime('now', '-10 minutes')", (err) => {
-    if (err) console.error('❌ Error cleaning pending data:', err);
-    else console.log('🕒 Removed stale pending records (>10min old)');
-  });
-}, 300000); // كل 5 دقائق
-
-// ---------- بدء الخادم ----------
+// بدء الخادم
 app.listen(PORT, () => {
   console.log(`🚀 Liveness BLS Server running on port ${PORT}`);
   console.log(`📍 Health: http://localhost:${PORT}/health`);
 });
+
