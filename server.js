@@ -1,3 +1,4 @@
+
 // server.js — الإصدار النهائي (مع تنظيف السجلات pending بعد 10 دقائق)
 const express = require('express');
 const cors = require('cors');
@@ -238,33 +239,3 @@ app.get('/user_status.php', (req, res) => {
     }
   );
 });
-
-// 6. Debug endpoint
-app.get('/debug_all', (req, res) => {
-  db.all("SELECT * FROM liveness_data ORDER BY created_at DESC LIMIT 500", [], (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
-    res.json(rows);
-  });
-});
-
-// ---------- تنظيف تلقائي ----------
-setInterval(() => {
-  // حذف كل السجلات الأقدم من ساعتين
-  db.run("DELETE FROM liveness_data WHERE created_at < datetime('now', '-2 hours')", (err) => {
-    if (err) console.error('❌ Error cleaning old data:', err);
-    else console.log('🧹 Deleted old (>2h) data');
-  });
-
-  // حذف السجلات التي حالتها pending منذ أكثر من 10 دقائق
-  db.run("DELETE FROM liveness_data WHERE status = 'pending' AND created_at < datetime('now', '-10 minutes')", (err) => {
-    if (err) console.error('❌ Error cleaning pending data:', err);
-    else console.log('🕒 Removed stale pending records (>10min old)');
-  });
-}, 300000); // كل 5 دقائق
-
-// ---------- بدء الخادم ----------
-app.listen(PORT, () => {
-  console.log(`🚀 Liveness BLS Server running on port ${PORT}`);
-  console.log(`📍 Health: http://localhost:${PORT}/health`);
-});
-
