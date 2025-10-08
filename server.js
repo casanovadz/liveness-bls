@@ -70,7 +70,7 @@ app.get('/', (req, res) => {
   });
 });
 
-// 1. استرجاع البيانات أو إنشاؤها تلقائيًا (مع إيقاف بعد 5 دقائق أو اكتمال العملية)
+// 1. استرجاع البيانات أو إنشاؤها تلقائيًا
 app.get('/retrieve_data.php', (req, res) => {
   const userId = req.query.user_id;
   console.log('📥 GET /retrieve_data.php?user_id=', userId);
@@ -79,14 +79,13 @@ app.get('/retrieve_data.php', (req, res) => {
     return res.status(400).json({ error: 'user_id parameter is required' });
   }
 
-  db.get("SELECT * FROM liveness_data WHERE user_id = ?", [userId], (err, row) => {
+  db.all("SELECT * FROM liveness_data WHERE user_id = ?", [userId], (err, rows) => {
     if (err) {
       console.error('❌ Database error:', err);
       return res.status(500).json({ error: err.message });
     }
 
-    // 🆕 لو لم توجد بيانات، أنشئ سجل جديد بحالة pending
-    if (!row) {
+    if (rows.length === 0) {
       db.run(
         `INSERT INTO liveness_data (user_id, transaction_id, liveness_id, spoof_ip, status, created_at)
          VALUES (?, ?, ?, ?, ?, datetime('now'))`,
@@ -97,40 +96,20 @@ app.get('/retrieve_data.php', (req, res) => {
             return res.status(500).json({ error: insertErr.message });
           }
           console.log(`🆕 Created new pending record for user_id: ${userId}`);
-          return res.json([{ user_id: userId, status: 'pending' }]);
+          db.all("SELECT * FROM liveness_data WHERE user_id = ?", [userId], (e2, newRows) => {
+            if (e2) return res.status(500).json({ error: e2.message });
+            res.json(newRows);
+          });
         }
       );
-      return;
+    } else {
+      console.log('✅ Data retrieved:', rows.length, 'records for', userId);
+      res.json(rows);
     }
-
-    // 🕒 حساب المدة منذ الإنشاء
-    const createdAt = new Date(row.created_at);
-    const elapsedMinutes = (Date.now() - createdAt.getTime()) / 60000;
-
-    // ✅ إذا كانت العملية مكتملة — أوقف polling نهائيًا
-    if (row.status === 'completed') {
-      console.log(`✅ ${userId} completed — stop polling.`);
-      return res.json({ stop: true, status: 'completed' });
-    }
-
-    // ⏰ إذا تجاوزت المدة 5 دقائق — أوقف polling أيضًا
-    if (elapsedMinutes > 5) {
-      console.log(`⏰ Timeout reached for ${userId} (${elapsedMinutes.toFixed(1)} min).`);
-      db.run(
-        "UPDATE liveness_data SET status = 'timeout' WHERE user_id = ?",
-        [userId]
-      );
-      return res.json({ stop: true, status: 'timeout' });
-    }
-
-    // ⏳ إذا ما زالت العملية جارية
-    console.log(`⏳ Still pending for ${userId} (${elapsedMinutes.toFixed(1)} min).`);
-    return res.json([{ user_id: row.user_id, status: row.status }]);
   });
 });
 
-
-// 2. تخزين أو تحديث بيانات IP المزيف + إرجاع رابط مباشر للعميل
+// 2. تخزين أو تحديث بيانات IP المزيف
 app.post('/get_ip.php', (req, res) => {
   const data = req.body;
   console.log('📤 POST /get_ip.php', data);
@@ -152,8 +131,6 @@ app.post('/get_ip.php', (req, res) => {
       return res.status(500).json({ error: err.message });
     }
 
-    const selfieLink = `https://algeria.blsspainglobal.com/assets/images/logo.png?user_id=${encodeURIComponent(user_id)}`;
-
     if (row) {
       db.run(
         `UPDATE liveness_data
@@ -166,14 +143,7 @@ app.post('/get_ip.php', (req, res) => {
             return res.status(500).json({ error: updateErr.message });
           }
           console.log(`🔄 Updated record for user_id: ${user_id}`);
-          res.json({
-            success: true,
-            message: 'Spoof IP data updated successfully',
-            user_id,
-            transaction_id,
-            liveness_id,
-            link: selfieLink
-          });
+          res.json({ success: true, message: 'Spoof IP data updated successfully', id: row.id });
         }
       );
     } else {
@@ -187,20 +157,12 @@ app.post('/get_ip.php', (req, res) => {
             return res.status(500).json({ error: insertErr.message });
           }
           console.log('✅ New data stored - ID:', this.lastID, 'user_id=', user_id);
-          res.json({
-            success: true,
-            message: 'Spoof IP data stored successfully',
-            user_id,
-            transaction_id,
-            liveness_id,
-            link: selfieLink
-          });
+          res.json({ success: true, message: 'Spoof IP data stored successfully', id: this.lastID });
         }
       );
     }
   });
 });
-
 
 // 3. Health check
 app.get('/health', (req, res) => {
@@ -275,33 +237,4 @@ app.get('/user_status.php', (req, res) => {
       else res.json({ success: false, message: 'لم يتم العثور على بيانات للمستخدم' });
     }
   );
-});
-
-// 6. Debug endpoint
-app.get('/debug_all', (req, res) => {
-  db.all("SELECT * FROM liveness_data ORDER BY created_at DESC LIMIT 500", [], (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
-    res.json(rows);
-  });
-});
-
-// ---------- تنظيف تلقائي ----------
-setInterval(() => {
-  // حذف كل السجلات الأقدم من ساعتين
-  db.run("DELETE FROM liveness_data WHERE created_at < datetime('now', '-2 hours')", (err) => {
-    if (err) console.error('❌ Error cleaning old data:', err);
-    else console.log('🧹 Deleted old (>2h) data');
-  });
-
-  // حذف السجلات التي حالتها pending منذ أكثر من 10 دقائق
-  db.run("DELETE FROM liveness_data WHERE status = 'pending' AND created_at < datetime('now', '-10 minutes')", (err) => {
-    if (err) console.error('❌ Error cleaning pending data:', err);
-    else console.log('🕒 Removed stale pending records (>10min old)');
-  });
-}, 300000); // كل 5 دقائق
-
-// ---------- بدء الخادم ----------
-app.listen(PORT, () => {
-  console.log(`🚀 Liveness BLS Server running on port ${PORT}`);
-  console.log(`📍 Health: http://localhost:${PORT}/health`);
 });
