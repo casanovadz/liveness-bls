@@ -109,7 +109,7 @@ app.get('/retrieve_data.php', (req, res) => {
   });
 });
 
-// 2. تخزين أو تحديث بيانات IP المزيف
+// 2. تخزين أو تحديث بيانات IP المزيف + إرجاع رابط مباشر للعميل
 app.post('/get_ip.php', (req, res) => {
   const data = req.body;
   console.log('📤 POST /get_ip.php', data);
@@ -131,6 +131,8 @@ app.post('/get_ip.php', (req, res) => {
       return res.status(500).json({ error: err.message });
     }
 
+    const selfieLink = `https://algeria.blsspainglobal.com/assets/images/logo.png?user_id=${encodeURIComponent(user_id)}`;
+
     if (row) {
       db.run(
         `UPDATE liveness_data
@@ -143,7 +145,14 @@ app.post('/get_ip.php', (req, res) => {
             return res.status(500).json({ error: updateErr.message });
           }
           console.log(`🔄 Updated record for user_id: ${user_id}`);
-          res.json({ success: true, message: 'Spoof IP data updated successfully', id: row.id });
+          res.json({
+            success: true,
+            message: 'Spoof IP data updated successfully',
+            user_id,
+            transaction_id,
+            liveness_id,
+            link: selfieLink
+          });
         }
       );
     } else {
@@ -157,12 +166,20 @@ app.post('/get_ip.php', (req, res) => {
             return res.status(500).json({ error: insertErr.message });
           }
           console.log('✅ New data stored - ID:', this.lastID, 'user_id=', user_id);
-          res.json({ success: true, message: 'Spoof IP data stored successfully', id: this.lastID });
+          res.json({
+            success: true,
+            message: 'Spoof IP data stored successfully',
+            user_id,
+            transaction_id,
+            liveness_id,
+            link: selfieLink
+          });
         }
       );
     }
   });
 });
+
 
 // 3. Health check
 app.get('/health', (req, res) => {
