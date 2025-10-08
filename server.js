@@ -116,15 +116,18 @@ app.get('/retrieve_data.php', (req, res) => {
 // POST /get_ip.php  (accepts array or object)
 app.post('/get_ip.php', (req, res) => {
   let data = req.body;
+  const client_ip =
+    (req.headers['x-forwarded-for'] || '').split(',').shift() ||
+    req.socket?.remoteAddress ||
+    'unknown';
 
-  console.log('📤 POST /get_ip.php raw body:', data);
+  console.log('📤 POST /get_ip.php raw body:', data, ' | Detected client_ip:', client_ip);
 
   // Accept both JSON array [ {...} ] or single object { ... }
   if (!data) {
     return res.status(400).json({ error: 'Invalid data format' });
   }
   if (!Array.isArray(data)) {
-    // if body is a single object, wrap it
     if (typeof data === 'object') {
       data = [data];
     } else {
@@ -144,18 +147,20 @@ app.post('/get_ip.php', (req, res) => {
   }
 
   db.run(
-    `INSERT OR REPLACE INTO liveness_data (user_id, transaction_id, liveness_id, spoof_ip, status) VALUES (?, ?, ?, ?, COALESCE((SELECT status FROM liveness_data WHERE user_id = ? AND transaction_id = ?), 'pending'))`,
-    [user_id, transaction_id, liveness_id, spoof_ip, user_id, transaction_id],
-    function(err) {
+    `INSERT OR REPLACE INTO liveness_data (user_id, transaction_id, liveness_id, spoof_ip, client_ip, status)
+     VALUES (?, ?, ?, ?, ?, COALESCE((SELECT status FROM liveness_data WHERE user_id = ? AND transaction_id = ?), 'pending'))`,
+    [user_id, transaction_id, liveness_id, spoof_ip, client_ip, user_id, transaction_id],
+    function (err) {
       if (err) {
         console.error('❌ Database error (insert):', err);
         return res.status(500).json({ error: err.message });
       }
-      console.log('✅ Data stored - ID:', this.lastID, ' user_id=', user_id);
+      console.log('✅ Data stored - ID:', this.lastID, ' user_id=', user_id, ' spoof_ip=', spoof_ip, ' client_ip=', client_ip);
       res.json({
         success: true,
         message: 'Spoof IP data stored successfully',
-        id: this.lastID
+        id: this.lastID,
+        client_ip
       });
     }
   );
