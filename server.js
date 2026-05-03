@@ -1,4 +1,4 @@
-// server.js — الإصدار النهائي (مع دعم actions لحركات الرأس وإضافة reset endpoint)
+// server.js — الإصدار النهائي (مع دعم actions لحركات الرأس)
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
@@ -24,14 +24,14 @@ const allowedHeaders = [
 
 app.use(cors({
   origin: '*',
-  methods: ['GET', 'POST', 'OPTIONS', 'DELETE'],
+  methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: allowedHeaders,
   credentials: true
 }));
 
 app.options('*', (req, res) => {
   res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS,DELETE');
+  res.header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
   res.header('Access-Control-Allow-Headers', allowedHeaders.join(', '));
   return res.sendStatus(200);
 });
@@ -151,7 +151,7 @@ app.post('/get_ip.php', (req, res) => {
   }
 
   const item = data[0];
-  const { spoof_ip, user_id, transaction_id, liveness_id, actions, force_new } = item || {};
+  const { spoof_ip, user_id, transaction_id, liveness_id, actions } = item || {};
 
   if (!user_id || !transaction_id || !spoof_ip) {
     return res.status(400).json({ error: 'Missing required fields' });
@@ -161,91 +161,66 @@ app.post('/get_ip.php', (req, res) => {
   let finalActions = actions;
   if (!finalActions || !Array.isArray(finalActions) || finalActions.length === 0) {
     // الإجراءات الافتراضية التي تطلب حركات الرأس
-    finalActions = ["video_selfie_scan", "video_selfie_smile", "video_selfie_blink"];
+    finalActions = ["video_selfie_scan", "video_selfie_smile"];
   }
   const actionsJson = JSON.stringify(finalActions);
   console.log(`🎭 Actions for ${user_id}:`, finalActions);
-  console.log(`🔄 Force new: ${force_new ? 'YES' : 'NO'}`);
 
-  // إذا كان force_new = true، احذف السجل القديم أولاً
-  if (force_new === true) {
-    db.run("DELETE FROM liveness_data WHERE user_id = ?", [user_id], function(deleteErr) {
-      if (deleteErr) {
-        console.error('❌ Error deleting old record:', deleteErr);
-      } else {
-        console.log(`🗑️ Deleted old record for user_id: ${user_id}`);
-      }
-      // بعد الحذف، قم بإنشاء سجل جديد
-      createNewRecord();
-    });
-  } else {
-    // تحقق من وجود السجل
-    db.get("SELECT id FROM liveness_data WHERE user_id = ?", [user_id], (err, row) => {
-      if (err) {
-        console.error('❌ Database error:', err);
-        return res.status(500).json({ error: err.message });
-      }
-      
-      if (row) {
-        updateExistingRecord();
-      } else {
-        createNewRecord();
-      }
-    });
-  }
+  db.get("SELECT id FROM liveness_data WHERE user_id = ?", [user_id], (err, row) => {
+    if (err) {
+      console.error('❌ Database error:', err);
+      return res.status(500).json({ error: err.message });
+    }
 
-  function createNewRecord() {
-    db.run(
-      `INSERT INTO liveness_data (user_id, transaction_id, liveness_id, spoof_ip, actions, status, created_at)
-       VALUES (?, ?, ?, ?, ?, 'pending', datetime('now'))`,
-      [user_id, transaction_id, liveness_id, spoof_ip, actionsJson],
-      function (insertErr) {
-        if (insertErr) {
-          console.error('❌ Insert error:', insertErr);
-          return res.status(500).json({ error: insertErr.message });
-        }
-        console.log('✅ New data stored - ID:', this.lastID, 'user_id=', user_id, 'actions:', actionsJson);
-        
-        const selfieLink = `https://algeria.blsspainglobal.com/assets/images/logo.png?user_id=${encodeURIComponent(user_id)}`;
-        res.json({
-          success: true,
-          message: 'Spoof IP data stored successfully',
-          user_id,
-          transaction_id,
-          liveness_id,
-          actions: finalActions,
-          link: selfieLink
-        });
-      }
-    );
-  }
-
-  function updateExistingRecord() {
     const selfieLink = `https://algeria.blsspainglobal.com/assets/images/logo.png?user_id=${encodeURIComponent(user_id)}`;
-    
-    db.run(
-      `UPDATE liveness_data
-       SET transaction_id = ?, liveness_id = ?, spoof_ip = ?, actions = ?, status = 'updated', created_at = datetime('now')
-       WHERE user_id = ?`,
-      [transaction_id, liveness_id, spoof_ip, actionsJson, user_id],
-      function (updateErr) {
-        if (updateErr) {
-          console.error('❌ Update error:', updateErr);
-          return res.status(500).json({ error: updateErr.message });
+
+    if (row) {
+      db.run(
+        `UPDATE liveness_data
+         SET transaction_id = ?, liveness_id = ?, spoof_ip = ?, actions = ?, status = 'updated', created_at = datetime('now')
+         WHERE user_id = ?`,
+        [transaction_id, liveness_id, spoof_ip, actionsJson, user_id],
+        function (updateErr) {
+          if (updateErr) {
+            console.error('❌ Update error:', updateErr);
+            return res.status(500).json({ error: updateErr.message });
+          }
+          console.log(`🔄 Updated record for user_id: ${user_id} with actions: ${actionsJson}`);
+          res.json({
+            success: true,
+            message: 'Spoof IP data updated successfully',
+            user_id,
+            transaction_id,
+            liveness_id,
+            actions: finalActions,
+            link: selfieLink
+          });
         }
-        console.log(`🔄 Updated record for user_id: ${user_id} with actions: ${actionsJson}`);
-        res.json({
-          success: true,
-          message: 'Spoof IP data updated successfully',
-          user_id,
-          transaction_id,
-          liveness_id,
-          actions: finalActions,
-          link: selfieLink
-        });
-      }
-    );
-  }
+      );
+    } else {
+      db.run(
+        `INSERT INTO liveness_data (user_id, transaction_id, liveness_id, spoof_ip, actions, status, created_at)
+         VALUES (?, ?, ?, ?, ?, 'pending', datetime('now'))`,
+        [user_id, transaction_id, liveness_id, spoof_ip, actionsJson],
+        function (insertErr) {
+          if (insertErr) {
+            console.error('❌ Insert error:', insertErr);
+            return res.status(500).json({ error: insertErr.message });
+          }
+          console.log('✅ New data stored - ID:', this.lastID, 'user_id=', user_id, 'actions:', actionsJson);
+          res.json({
+            success: true,
+            message: 'Spoof IP data stored successfully',
+            user_id,
+            transaction_id,
+            liveness_id,
+            actions: finalActions,
+            link: selfieLink
+          });
+        }
+      );
+    }
+  });
 });
 
 
@@ -254,14 +229,13 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'OK',
     server: 'liveness-bls.uk',
-    version: '2.3',
+    version: '2.2',
     timestamp: new Date().toISOString(),
     endpoints: {
       retrieve_data: 'GET /retrieve_data.php?user_id=USER_ID',
       store_spoof_ip: 'POST /get_ip.php',
       get_actions: 'GET /get_actions.php?user_id=USER_ID',
-      update_liveness: 'POST /update_liveness.php',
-      reset_user_data: 'POST /reset_user_data.php'
+      update_liveness: 'POST /update_liveness.php'
     }
   });
 });
@@ -281,7 +255,7 @@ app.get('/get_actions.php', (req, res) => {
       return res.status(500).json({ error: err.message });
     }
 
-    let actions = ["video_selfie_scan", "video_selfie_smile", "video_selfie_blink"]; // القيمة الافتراضية المتقدمة
+    let actions = ["video_selfie_blank"]; // القيمة الافتراضية
     if (row && row.actions) {
       try {
         actions = JSON.parse(row.actions);
@@ -297,29 +271,6 @@ app.get('/get_actions.php', (req, res) => {
       success: true,
       user_id: userId,
       actions: actions
-    });
-  });
-});
-
-// 🆕 3.6 حذف بيانات المستخدم (لإعادة التعيين)
-app.post('/reset_user_data.php', (req, res) => {
-  const { user_id } = req.body;
-  console.log('🗑️ POST /reset_user_data.php for user:', user_id);
-
-  if (!user_id) {
-    return res.status(400).json({ error: 'user_id is required' });
-  }
-
-  db.run("DELETE FROM liveness_data WHERE user_id = ?", [user_id], function(err) {
-    if (err) {
-      console.error('❌ Error deleting user data:', err);
-      return res.status(500).json({ error: err.message });
-    }
-    console.log(`✅ Deleted data for user: ${user_id} (changes: ${this.changes})`);
-    res.json({ 
-      success: true, 
-      message: `Data for user ${user_id} has been reset`,
-      deleted: this.changes
     });
   });
 });
