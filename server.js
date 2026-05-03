@@ -1,4 +1,4 @@
-// server.js — الإصدار النهائي (مع دعم actions لحركات الرأس)
+// server.js — الإصدار النهائي (مع دعم actions لحركات الرأس ونقاط النهاية الكاملة)
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
@@ -233,14 +233,19 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'OK',
     server: 'liveness-bls.onrender.com',
-    version: '2.3',
+    version: '2.4',
     timestamp: new Date().toISOString(),
     endpoints: {
+      root: 'GET /',
       retrieve_data: 'GET /retrieve_data.php?user_id=USER_ID',
       store_spoof_ip: 'POST /get_ip.php',
       get_actions: 'GET /get_actions.php?user_id=USER_ID',
+      set_actions: 'POST /set_actions.php',
       update_liveness: 'POST /update_liveness.php',
-      update_liveness_id: 'POST /update_liveness_id'
+      update_liveness_id: 'POST /update_liveness_id',
+      user_status: 'GET /user_status.php?user_id=USER_ID',
+      debug_all: 'GET /debug_all',
+      liveness_page: 'GET /liveness.html?user_id=USER_ID'
     }
   });
 });
@@ -403,6 +408,163 @@ app.post('/update_liveness_id', (req, res) => {
   });
 });
 
+// 8. 🆕 نقطة نهاية لاستقبال الإجراءات من Userscript
+app.post('/set_actions.php', (req, res) => {
+  const { user_id, actions } = req.body;
+  console.log('📥 POST /set_actions.php', { user_id, actions });
+
+  if (!user_id || !actions || !Array.isArray(actions)) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'user_id and actions array are required' 
+    });
+  }
+
+  const actionsJson = JSON.stringify(actions);
+
+  db.run(
+    `INSERT INTO liveness_data (user_id, actions, status, created_at)
+     VALUES (?, ?, 'pending', datetime('now'))
+     ON CONFLICT(user_id) DO UPDATE SET
+       actions = excluded.actions,
+       status = 'pending',
+       created_at = datetime('now')`,
+    [user_id, actionsJson],
+    function(err) {
+      if (err) {
+        console.error('❌ Failed to set actions:', err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
+      
+      console.log(`✅ Actions set for user ${user_id}:`, actions);
+      res.json({ 
+        success: true, 
+        message: 'Actions set successfully',
+        user_id: user_id,
+        actions: actions
+      });
+    }
+  );
+});
+
+// 9. 🆕 صفحة HTML لعملية التحقق
+app.get('/liveness.html', (req, res) => {
+  const userId = req.query.user_id;
+  console.log('📄 Serving liveness.html for user_id:', userId);
+  
+  res.send(`
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Liveness Verification</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background: #1a1a1a; color: white; }
+        .container { max-width: 500px; margin: 0 auto; background: #2d2d2d; padding: 30px; border-radius: 15px; }
+        button { padding: 15px 30px; font-size: 18px; background: #28a745; color: white; border: none; border-radius: 8px; cursor: pointer; margin-top: 20px; }
+        #status { margin-top: 20px; padding: 10px; border-radius: 8px; }
+        .loading { display: inline-block; width: 20px; height: 20px; border: 3px solid #f3f3f3; border-top: 3px solid #28a745; border-radius: 50%; animation: spin 1s linear infinite; margin-right: 10px; vertical-align: middle; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+    <script src="https://web-sdk.prod.cdn.spain.ozforensics.com/blsinternational/plugin_liveness.php"></script>
+</head>
+<body>
+    <div class="container">
+        <h1>📸 Liveness Verification</h1>
+        <p>User ID: ${userId || 'Not specified'}</p>
+        <div id="status">🔄 Loading...</div>
+        <button id="startBtn" style="display:none;">Start Verification</button>
+    </div>
+    <script>
+        const userId = "${userId || ''}";
+        const UPDATE_URL = "https://liveness-bls.onrender.com/update_liveness_id";
+        let ozStarted = false;
+        let retryCount = 0;
+        
+        function updateStatus(msg, isError = false) {
+            const statusDiv = document.getElementById('status');
+            statusDiv.innerHTML = msg;
+            statusDiv.style.background = isError ? '#dc354520' : '#28a74520';
+        }
+        
+        async function sendToServer(livenessId) {
+            updateStatus('📤 Sending to server...');
+            try {
+                const response = await fetch(UPDATE_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user_id: userId,
+                        liveness_id: livenessId,
+                        transaction_id: 'liveness-' + Date.now(),
+                        spoof_ip: 'auto'
+                    })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    updateStatus('✅ Success! You can close this window.');
+                    setTimeout(() => window.close(), 3000);
+                } else {
+                    updateStatus('❌ Server error: ' + (data.error || 'Unknown'), true);
+                }
+            } catch(err) {
+                updateStatus('❌ Failed: ' + err.message, true);
+            }
+        }
+        
+        function startOzLiveness() {
+            if (ozStarted) return;
+            ozStarted = true;
+            updateStatus('🎥 Starting camera...');
+            
+            if (typeof OzLiveness === 'undefined') {
+                if (retryCount < 30) {
+                    retryCount++;
+                    updateStatus('⏳ Loading SDK... (' + retryCount + '/30)');
+                    setTimeout(startOzLiveness, 1000);
+                    return;
+                }
+                updateStatus('❌ Failed to load SDK', true);
+                return;
+            }
+            
+            OzLiveness.open({
+                lang: 'en',
+                meta: { user_id: userId, transaction_id: 'liveness-' + Date.now() },
+                overlay_options: true,
+                action: ["video_selfie_high", "video_selfie_eyes"],
+                on_ready: () => updateStatus('✅ Camera ready! Follow instructions.'),
+                on_action_start: (action) => updateStatus('🎯 ' + action),
+                on_complete: (result) => {
+                    if (result && result.event_session_id) {
+                        sendToServer(result.event_session_id);
+                    } else {
+                        updateStatus('❌ No liveness ID received', true);
+                    }
+                },
+                on_error: (err) => {
+                    updateStatus('❌ Error: ' + JSON.stringify(err), true);
+                    ozStarted = false;
+                }
+            });
+        }
+        
+        setTimeout(() => {
+            if (!ozStarted) {
+                const btn = document.getElementById('startBtn');
+                btn.style.display = 'block';
+                btn.onclick = () => { btn.style.display = 'none'; startOzLiveness(); };
+            }
+        }, 8000);
+        
+        setTimeout(startOzLiveness, 2000);
+    </script>
+</body>
+</html>
+  `);
+});
+
 // ---------- تنظيف تلقائي ----------
 setInterval(() => {
   // حذف كل السجلات الأقدم من ساعتين
@@ -422,4 +584,16 @@ setInterval(() => {
 app.listen(PORT, () => {
   console.log(`🚀 Liveness BLS Server running on port ${PORT}`);
   console.log(`📍 Health: http://localhost:${PORT}/health`);
+  console.log(`📋 Endpoints:`);
+  console.log(`   GET  /`);
+  console.log(`   GET  /retrieve_data.php?user_id=ID`);
+  console.log(`   POST /get_ip.php`);
+  console.log(`   GET  /get_actions.php?user_id=ID`);
+  console.log(`   POST /set_actions.php`);
+  console.log(`   POST /update_liveness.php`);
+  console.log(`   POST /update_liveness_id`);
+  console.log(`   GET  /user_status.php?user_id=ID`);
+  console.log(`   GET  /debug_all`);
+  console.log(`   GET  /liveness.html?user_id=ID`);
+  console.log(`   GET  /health`);
 });
