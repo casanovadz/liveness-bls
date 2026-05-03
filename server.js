@@ -1,4 +1,4 @@
-// server.js — الإصدار النهائي (مع دعم actions لحركات الرأس ونقطة نهاية update_liveness_id)
+// server.js — الإصدار النهائي (مع دعم actions لحركات الرأس)
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
@@ -176,6 +176,7 @@ app.post('/get_ip.php', (req, res) => {
       return res.status(500).json({ error: err.message });
     }
 
+    // الرابط يبقى كما هو دون تغيير
     const selfieLink = `https://algeria.blsspainglobal.com/assets/images/logo.png?user_id=${encodeURIComponent(user_id)}`;
 
     if (row) {
@@ -235,14 +236,11 @@ app.get('/health', (req, res) => {
     version: '2.3',
     timestamp: new Date().toISOString(),
     endpoints: {
-      root: 'GET /',
       retrieve_data: 'GET /retrieve_data.php?user_id=USER_ID',
       store_spoof_ip: 'POST /get_ip.php',
       get_actions: 'GET /get_actions.php?user_id=USER_ID',
       update_liveness: 'POST /update_liveness.php',
-      update_liveness_id: 'POST /update_liveness_id',
-      user_status: 'GET /user_status.php?user_id=USER_ID',
-      debug_all: 'GET /debug_all'
+      update_liveness_id: 'POST /update_liveness_id'
     }
   });
 });
@@ -395,7 +393,6 @@ app.post('/update_liveness_id', (req, res) => {
     
     console.log(`✅ Liveness ID ${liveness_id} stored for user ${user_id}`);
     
-    // إرجاع نفس البيانات للتأكيد
     res.json({ 
       success: true, 
       message: 'Liveness ID updated successfully',
@@ -404,45 +401,6 @@ app.post('/update_liveness_id', (req, res) => {
       status: 'completed'
     });
   });
-});
-
-// 8. 🆕端点 لاستقبال الإجراءات المخصصة من المستخدم
-app.post('/set_actions.php', (req, res) => {
-  const { user_id, actions } = req.body;
-  console.log('📥 POST /set_actions.php', { user_id, actions });
-
-  if (!user_id || !actions || !Array.isArray(actions)) {
-    return res.status(400).json({ 
-      success: false, 
-      error: 'user_id and actions array are required' 
-    });
-  }
-
-  const actionsJson = JSON.stringify(actions);
-
-  db.run(
-    `INSERT INTO liveness_data (user_id, actions, status, created_at)
-     VALUES (?, ?, 'pending', datetime('now'))
-     ON CONFLICT(user_id) DO UPDATE SET
-       actions = excluded.actions,
-       status = 'pending',
-       created_at = datetime('now')`,
-    [user_id, actionsJson],
-    function(err) {
-      if (err) {
-        console.error('❌ Failed to set actions:', err);
-        return res.status(500).json({ success: false, error: err.message });
-      }
-      
-      console.log(`✅ Actions set for user ${user_id}:`, actions);
-      res.json({ 
-        success: true, 
-        message: 'Actions set successfully',
-        user_id: user_id,
-        actions: actions
-      });
-    }
-  );
 });
 
 // ---------- تنظيف تلقائي ----------
@@ -464,11 +422,4 @@ setInterval(() => {
 app.listen(PORT, () => {
   console.log(`🚀 Liveness BLS Server running on port ${PORT}`);
   console.log(`📍 Health: http://localhost:${PORT}/health`);
-  console.log(`📋 Endpoints:`);
-  console.log(`   GET  /retrieve_data.php?user_id=ID`);
-  console.log(`   POST /get_ip.php`);
-  console.log(`   POST /update_liveness_id`);
-  console.log(`   POST /set_actions.php`);
-  console.log(`   GET  /user_status.php?user_id=ID`);
-  console.log(`   GET  /debug_all`);
 });
