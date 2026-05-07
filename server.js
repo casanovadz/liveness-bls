@@ -81,7 +81,7 @@ app.get('/', (req, res) => {
   });
 });
 
-// 1. استرجاع البيانات أو إنشاؤها تلقائيًا (مع إيقاف بعد 5 دقائق أو اكتمال العملية)
+// 1. استرجاع البيانات أو إنشاؤها تلقائيًا (مع إيقاف بعد 5 دقائق أو اكتمال العملية) - مُعدل
 app.get('/retrieve_data.php', (req, res) => {
   const userId = req.query.user_id;
   console.log('📥 GET /retrieve_data.php?user_id=', userId);
@@ -90,37 +90,41 @@ app.get('/retrieve_data.php', (req, res) => {
     return res.status(400).json({ error: 'user_id parameter is required' });
   }
 
-  db.get("SELECT * FROM liveness_data WHERE user_id = ?", [userId], (err, row) => {
+  // تنظيف userId من أي مسافات أو أحرف غير مرغوب فيها
+  const cleanUserId = String(userId).trim();
+  
+  db.get("SELECT * FROM liveness_data WHERE user_id = ?", [cleanUserId], (err, row) => {
     if (err) {
       console.error('❌ Database error:', err);
       return res.status(500).json({ error: err.message });
     }
 
-    // 🆕 لو لم توجد بيانات، أنشئ سجل جديد بحالة pending
+    // لو لم توجد بيانات، أنشئ سجل جديد بحالة pending
     if (!row) {
       db.run(
         `INSERT INTO liveness_data (user_id, transaction_id, liveness_id, spoof_ip, actions, status, created_at)
          VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`,
-        [userId, 'tx-auto', 'lv-auto', '0.0.0.0', '["video_selfie_blank"]', 'pending'],
+        [cleanUserId, 'tx-auto', 'lv-auto', '0.0.0.0', '["video_selfie_blank"]', 'pending'],
         function (insertErr) {
           if (insertErr) {
             console.error('❌ Insert error:', insertErr);
             return res.status(500).json({ error: insertErr.message });
           }
-          console.log(`🆕 Created new pending record for user_id: ${userId}`);
-          return res.json([{ user_id: userId, status: 'pending' }]);
+          console.log(`🆕 Created new pending record for user_id: ${cleanUserId}`);
+          // 🔥 تصحيح: إعادة كائن وليس مصفوفة
+          return res.json({ user_id: cleanUserId, status: 'pending' });
         }
       );
       return;
     }
 
-    // 🕒 حساب المدة منذ الإنشاء
+    // حساب المدة منذ الإنشاء
     const createdAt = new Date(row.created_at);
     const elapsedMinutes = (Date.now() - createdAt.getTime()) / 60000;
 
-    // ✅ إذا كانت العملية مكتملة — أوقف polling نهائيًا
+    // إذا كانت العملية مكتملة — أوقف polling نهائيًا
     if (row.status === 'completed') {
-      console.log(`✅ ${userId} completed — stop polling.`);
+      console.log(`✅ ${cleanUserId} completed — stop polling.`);
       return res.json({ 
         stop: true, 
         status: 'completed',
@@ -129,19 +133,19 @@ app.get('/retrieve_data.php', (req, res) => {
       });
     }
 
-    // ⏰ إذا تجاوزت المدة 5 دقائق — أوقف polling أيضًا
+    // إذا تجاوزت المدة 5 دقائق — أوقف polling أيضًا
     if (elapsedMinutes > 5) {
-      console.log(`⏰ Timeout reached for ${userId} (${elapsedMinutes.toFixed(1)} min).`);
+      console.log(`⏰ Timeout reached for ${cleanUserId} (${elapsedMinutes.toFixed(1)} min).`);
       db.run(
         "UPDATE liveness_data SET status = 'timeout' WHERE user_id = ?",
-        [userId]
+        [cleanUserId]
       );
       return res.json({ stop: true, status: 'timeout' });
     }
 
-    // ⏳ إذا ما زالت العملية جارية
-    console.log(`⏳ Still pending for ${userId} (${elapsedMinutes.toFixed(1)} min).`);
-    return res.json([{ user_id: row.user_id, status: row.status }]);
+    // إذا ما زالت العملية جارية
+    console.log(`⏳ Still pending for ${cleanUserId} (${elapsedMinutes.toFixed(1)} min).`);
+    return res.json({ user_id: row.user_id, status: row.status });
   });
 });
 
@@ -233,7 +237,7 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'OK',
     server: 'liveness-bls.onrender.com',
-    version: '2.4',
+    version: '2.5',
     timestamp: new Date().toISOString(),
     endpoints: {
       root: 'GET /',
@@ -245,7 +249,9 @@ app.get('/health', (req, res) => {
       update_liveness_id: 'POST /update_liveness_id',
       user_status: 'GET /user_status.php?user_id=USER_ID',
       debug_all: 'GET /debug_all',
-      liveness_page: 'GET /liveness.html?user_id=USER_ID'
+      liveness_page: 'GET /liveness.html?user_id=USER_ID',
+      test_db: 'GET /test-db',
+      test_update_liveness: 'GET /test-update-liveness'
     }
   });
 });
@@ -366,8 +372,12 @@ app.get('/debug_all', (req, res) => {
   });
 });
 
-// 7. 🆕 نقطة نهاية مباشرة لتحديث liveness_id (للاستقبال من الإضافة)
+// 7. 🆕 نقطة نهاية مباشرة لتحديث liveness_id (للاستقبال من الإضافة) - مُعدلة ومحسنة
 app.post('/update_liveness_id', (req, res) => {
+  console.log('📥 [RAW] POST /update_liveness_id received');
+  console.log('📥 [HEADERS]', req.headers);
+  console.log('📥 [BODY]', req.body);
+  
   const { user_id, liveness_id, transaction_id, spoof_ip } = req.body;
   console.log('📥 [UPDATE] POST /update_liveness_id', { user_id, liveness_id, transaction_id, spoof_ip });
 
@@ -378,7 +388,9 @@ app.post('/update_liveness_id', (req, res) => {
     });
   }
 
-  // تحديث السجل الموجود أو إدراجه إذا لم يكن موجودًا
+  const cleanUserId = String(user_id).trim();
+  const cleanLivenessId = String(liveness_id).trim();
+
   const updateSql = `
     INSERT INTO liveness_data (user_id, transaction_id, liveness_id, spoof_ip, status, created_at)
     VALUES (?, ?, ?, ?, 'completed', datetime('now'))
@@ -390,22 +402,27 @@ app.post('/update_liveness_id', (req, res) => {
       created_at = datetime('now')
   `;
 
-  db.run(updateSql, [user_id, transaction_id || 'tx-auto', liveness_id, spoof_ip || '0.0.0.0'], function(err) {
+  db.run(updateSql, [cleanUserId, transaction_id || 'tx-auto', cleanLivenessId, spoof_ip || '0.0.0.0'], function(err) {
     if (err) {
       console.error('❌ Failed to update liveness_id:', err);
       return res.status(500).json({ success: false, error: err.message });
     }
     
-    console.log(`✅ Liveness ID ${liveness_id} stored for user ${user_id}`);
+    console.log(`✅ Liveness ID ${cleanLivenessId} stored for user ${cleanUserId}`);
     
     res.json({ 
       success: true, 
       message: 'Liveness ID updated successfully',
-      user_id: user_id,
-      liveness_id: liveness_id,
+      user_id: cleanUserId,
+      liveness_id: cleanLivenessId,
       status: 'completed'
     });
   });
+});
+
+// 7.1 🆕 نقطة نهاية اختبارية لتأكيد أن المسار يعمل
+app.get('/test-update-liveness', (req, res) => {
+  res.json({ success: true, message: 'Endpoint is reachable', timestamp: Date.now() });
 });
 
 // 8. 🆕 نقطة نهاية لاستقبال الإجراءات من Userscript
@@ -565,6 +582,16 @@ app.get('/liveness.html', (req, res) => {
   `);
 });
 
+// 10. 🆕 اختبار قاعدة البيانات
+app.get('/test-db', (req, res) => {
+  db.get("SELECT COUNT(*) as count FROM liveness_data", [], (err, row) => {
+    if (err) {
+      return res.status(500).json({ error: err.message });
+    }
+    res.json({ success: true, recordCount: row.count, timestamp: Date.now() });
+  });
+});
+
 // ---------- تنظيف تلقائي ----------
 setInterval(() => {
   // حذف كل السجلات الأقدم من ساعتين
@@ -595,5 +622,7 @@ app.listen(PORT, () => {
   console.log(`   GET  /user_status.php?user_id=ID`);
   console.log(`   GET  /debug_all`);
   console.log(`   GET  /liveness.html?user_id=ID`);
+  console.log(`   GET  /test-db`);
+  console.log(`   GET  /test-update-liveness`);
   console.log(`   GET  /health`);
 });
