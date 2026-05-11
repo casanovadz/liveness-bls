@@ -1,4 +1,4 @@
-// server.js — الإصدار النهائي (مع دعم actions لحركات الرأس ونقاط النهاية الكاملة)
+// server.js — الإصدار النهائي مع دعم POST لـ retrieve_data.php
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
@@ -81,7 +81,7 @@ app.get('/', (req, res) => {
   });
 });
 
-// 1. استرجاع البيانات أو إنشاؤها تلقائيًا (مع إيقاف بعد 5 دقائق أو اكتمال العملية) - مُعدل
+// 1. استرجاع البيانات أو إنشاؤها تلقائيًا (GET)
 app.get('/retrieve_data.php', (req, res) => {
   const userId = req.query.user_id;
   console.log('📥 GET /retrieve_data.php?user_id=', userId);
@@ -90,7 +90,6 @@ app.get('/retrieve_data.php', (req, res) => {
     return res.status(400).json({ error: 'user_id parameter is required' });
   }
 
-  // تنظيف userId من أي مسافات أو أحرف غير مرغوب فيها
   const cleanUserId = String(userId).trim();
   
   db.get("SELECT * FROM liveness_data WHERE user_id = ?", [cleanUserId], (err, row) => {
@@ -99,7 +98,6 @@ app.get('/retrieve_data.php', (req, res) => {
       return res.status(500).json({ error: err.message });
     }
 
-    // لو لم توجد بيانات، أنشئ سجل جديد بحالة pending
     if (!row) {
       db.run(
         `INSERT INTO liveness_data (user_id, transaction_id, liveness_id, spoof_ip, actions, status, created_at)
@@ -111,18 +109,15 @@ app.get('/retrieve_data.php', (req, res) => {
             return res.status(500).json({ error: insertErr.message });
           }
           console.log(`🆕 Created new pending record for user_id: ${cleanUserId}`);
-          // 🔥 تصحيح: إعادة كائن وليس مصفوفة
           return res.json({ user_id: cleanUserId, status: 'pending' });
         }
       );
       return;
     }
 
-    // حساب المدة منذ الإنشاء
     const createdAt = new Date(row.created_at);
     const elapsedMinutes = (Date.now() - createdAt.getTime()) / 60000;
 
-    // إذا كانت العملية مكتملة — أوقف polling نهائيًا
     if (row.status === 'completed') {
       console.log(`✅ ${cleanUserId} completed — stop polling.`);
       return res.json({ 
@@ -133,7 +128,6 @@ app.get('/retrieve_data.php', (req, res) => {
       });
     }
 
-    // إذا تجاوزت المدة 5 دقائق — أوقف polling أيضًا
     if (elapsedMinutes > 5) {
       console.log(`⏰ Timeout reached for ${cleanUserId} (${elapsedMinutes.toFixed(1)} min).`);
       db.run(
@@ -143,7 +137,68 @@ app.get('/retrieve_data.php', (req, res) => {
       return res.json({ stop: true, status: 'timeout' });
     }
 
-    // إذا ما زالت العملية جارية
+    console.log(`⏳ Still pending for ${cleanUserId} (${elapsedMinutes.toFixed(1)} min).`);
+    return res.json({ user_id: row.user_id, status: row.status });
+  });
+});
+
+// 1.1 🔥 دعم POST لنفس المسار (جديد)
+app.post('/retrieve_data.php', (req, res) => {
+  // دعم كل من body و query string
+  const userId = req.body.user_id || req.query.user_id;
+  console.log('📥 POST /retrieve_data.php?user_id=', userId);
+
+  if (!userId) {
+    return res.status(400).json({ error: 'user_id parameter is required' });
+  }
+
+  const cleanUserId = String(userId).trim();
+  
+  db.get("SELECT * FROM liveness_data WHERE user_id = ?", [cleanUserId], (err, row) => {
+    if (err) {
+      console.error('❌ Database error:', err);
+      return res.status(500).json({ error: err.message });
+    }
+
+    if (!row) {
+      db.run(
+        `INSERT INTO liveness_data (user_id, transaction_id, liveness_id, spoof_ip, actions, status, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`,
+        [cleanUserId, 'tx-auto', 'lv-auto', '0.0.0.0', '["video_selfie_blank"]', 'pending'],
+        function (insertErr) {
+          if (insertErr) {
+            console.error('❌ Insert error:', insertErr);
+            return res.status(500).json({ error: insertErr.message });
+          }
+          console.log(`🆕 Created new pending record for user_id: ${cleanUserId}`);
+          return res.json({ user_id: cleanUserId, status: 'pending' });
+        }
+      );
+      return;
+    }
+
+    const createdAt = new Date(row.created_at);
+    const elapsedMinutes = (Date.now() - createdAt.getTime()) / 60000;
+
+    if (row.status === 'completed') {
+      console.log(`✅ ${cleanUserId} completed — stop polling.`);
+      return res.json({ 
+        stop: true, 
+        status: 'completed',
+        liveness_id: row.liveness_id,
+        user_id: row.user_id
+      });
+    }
+
+    if (elapsedMinutes > 5) {
+      console.log(`⏰ Timeout reached for ${cleanUserId} (${elapsedMinutes.toFixed(1)} min).`);
+      db.run(
+        "UPDATE liveness_data SET status = 'timeout' WHERE user_id = ?",
+        [cleanUserId]
+      );
+      return res.json({ stop: true, status: 'timeout' });
+    }
+
     console.log(`⏳ Still pending for ${cleanUserId} (${elapsedMinutes.toFixed(1)} min).`);
     return res.json({ user_id: row.user_id, status: row.status });
   });
@@ -242,6 +297,7 @@ app.get('/health', (req, res) => {
     endpoints: {
       root: 'GET /',
       retrieve_data: 'GET /retrieve_data.php?user_id=USER_ID',
+      retrieve_data_post: 'POST /retrieve_data.php (new!)',
       store_spoof_ip: 'POST /get_ip.php',
       get_actions: 'GET /get_actions.php?user_id=USER_ID',
       set_actions: 'POST /set_actions.php',
@@ -614,6 +670,7 @@ app.listen(PORT, () => {
   console.log(`📋 Endpoints:`);
   console.log(`   GET  /`);
   console.log(`   GET  /retrieve_data.php?user_id=ID`);
+  console.log(`   POST /retrieve_data.php?user_id=ID (NEW!)`);
   console.log(`   POST /get_ip.php`);
   console.log(`   GET  /get_actions.php?user_id=ID`);
   console.log(`   POST /set_actions.php`);
