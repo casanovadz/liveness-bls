@@ -1,4 +1,4 @@
-// server.js — الإصدار النهائي مع دعم POST لـ retrieve_data.php
+// server.js — الإصدار النهائي مع دعم POST لـ retrieve_data.php وإضافة liveness_id في الرد
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
@@ -138,7 +138,12 @@ app.get('/retrieve_data.php', (req, res) => {
     }
 
     console.log(`⏳ Still pending for ${cleanUserId} (${elapsedMinutes.toFixed(1)} min).`);
-    return res.json({ user_id: row.user_id, status: row.status });
+    // 🔥 إضافة liveness_id إلى الرد
+    return res.json({ 
+      user_id: row.user_id, 
+      status: row.status,
+      liveness_id: row.liveness_id  // 🔥 تمت الإضافة
+    });
   });
 });
 
@@ -200,7 +205,12 @@ app.post('/retrieve_data.php', (req, res) => {
     }
 
     console.log(`⏳ Still pending for ${cleanUserId} (${elapsedMinutes.toFixed(1)} min).`);
-    return res.json({ user_id: row.user_id, status: row.status });
+    // 🔥 إضافة liveness_id إلى الرد
+    return res.json({ 
+      user_id: row.user_id, 
+      status: row.status,
+      liveness_id: row.liveness_id  // 🔥 تمت الإضافة
+    });
   });
 });
 
