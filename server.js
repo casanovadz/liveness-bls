@@ -1,9 +1,10 @@
-// server.js — الإصدار النهائي مع دعم POST لـ retrieve_data.php وإضافة liveness_id في الرد
+// server.js — الإصدار النهائي الكامل مع دعم transaction_id في جميع الردود
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
+const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -81,7 +82,7 @@ app.get('/', (req, res) => {
   });
 });
 
-// 1. استرجاع البيانات أو إنشاؤها تلقائيًا (GET)
+// 1. استرجاع البيانات أو إنشاؤها تلقائيًا (GET) - مع إرجاع transaction_id
 app.get('/retrieve_data.php', (req, res) => {
   const userId = req.query.user_id;
   console.log('📥 GET /retrieve_data.php?user_id=', userId);
@@ -99,17 +100,24 @@ app.get('/retrieve_data.php', (req, res) => {
     }
 
     if (!row) {
+      // إنشاء transaction_id حقيقي (UUID أو مؤقت)
+      const newTransactionId = crypto.randomUUID ? crypto.randomUUID() : ('tx-' + Date.now() + '-' + Math.random().toString(36).substr(2, 8));
       db.run(
         `INSERT INTO liveness_data (user_id, transaction_id, liveness_id, spoof_ip, actions, status, created_at)
          VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`,
-        [cleanUserId, 'tx-auto', 'lv-auto', '0.0.0.0', '["video_selfie_blank"]', 'pending'],
+        [cleanUserId, newTransactionId, 'lv-auto', '0.0.0.0', '["video_selfie_blank"]', 'pending'],
         function (insertErr) {
           if (insertErr) {
             console.error('❌ Insert error:', insertErr);
             return res.status(500).json({ error: insertErr.message });
           }
-          console.log(`🆕 Created new pending record for user_id: ${cleanUserId}`);
-          return res.json({ user_id: cleanUserId, status: 'pending' });
+          console.log(`🆕 Created new pending record for user_id: ${cleanUserId} with transaction_id: ${newTransactionId}`);
+          return res.json({ 
+            user_id: cleanUserId, 
+            status: 'pending',
+            transaction_id: newTransactionId,
+            liveness_id: 'lv-auto'
+          });
         }
       );
       return;
@@ -124,7 +132,8 @@ app.get('/retrieve_data.php', (req, res) => {
         stop: true, 
         status: 'completed',
         liveness_id: row.liveness_id,
-        user_id: row.user_id
+        user_id: row.user_id,
+        transaction_id: row.transaction_id
       });
     }
 
@@ -134,22 +143,25 @@ app.get('/retrieve_data.php', (req, res) => {
         "UPDATE liveness_data SET status = 'timeout' WHERE user_id = ?",
         [cleanUserId]
       );
-      return res.json({ stop: true, status: 'timeout' });
+      return res.json({ 
+        stop: true, 
+        status: 'timeout',
+        transaction_id: row.transaction_id
+      });
     }
 
     console.log(`⏳ Still pending for ${cleanUserId} (${elapsedMinutes.toFixed(1)} min).`);
-    // 🔥 إضافة liveness_id إلى الرد
     return res.json({ 
       user_id: row.user_id, 
       status: row.status,
-      liveness_id: row.liveness_id  // 🔥 تمت الإضافة
+      liveness_id: row.liveness_id,
+      transaction_id: row.transaction_id
     });
   });
 });
 
-// 1.1 🔥 دعم POST لنفس المسار (جديد)
+// 1.1 دعم POST لنفس المسار
 app.post('/retrieve_data.php', (req, res) => {
-  // دعم كل من body و query string
   const userId = req.body.user_id || req.query.user_id;
   console.log('📥 POST /retrieve_data.php?user_id=', userId);
 
@@ -166,17 +178,23 @@ app.post('/retrieve_data.php', (req, res) => {
     }
 
     if (!row) {
+      const newTransactionId = crypto.randomUUID ? crypto.randomUUID() : ('tx-' + Date.now() + '-' + Math.random().toString(36).substr(2, 8));
       db.run(
         `INSERT INTO liveness_data (user_id, transaction_id, liveness_id, spoof_ip, actions, status, created_at)
          VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`,
-        [cleanUserId, 'tx-auto', 'lv-auto', '0.0.0.0', '["video_selfie_blank"]', 'pending'],
+        [cleanUserId, newTransactionId, 'lv-auto', '0.0.0.0', '["video_selfie_blank"]', 'pending'],
         function (insertErr) {
           if (insertErr) {
             console.error('❌ Insert error:', insertErr);
             return res.status(500).json({ error: insertErr.message });
           }
-          console.log(`🆕 Created new pending record for user_id: ${cleanUserId}`);
-          return res.json({ user_id: cleanUserId, status: 'pending' });
+          console.log(`🆕 Created new pending record for user_id: ${cleanUserId} with transaction_id: ${newTransactionId}`);
+          return res.json({ 
+            user_id: cleanUserId, 
+            status: 'pending',
+            transaction_id: newTransactionId,
+            liveness_id: 'lv-auto'
+          });
         }
       );
       return;
@@ -191,7 +209,8 @@ app.post('/retrieve_data.php', (req, res) => {
         stop: true, 
         status: 'completed',
         liveness_id: row.liveness_id,
-        user_id: row.user_id
+        user_id: row.user_id,
+        transaction_id: row.transaction_id
       });
     }
 
@@ -201,15 +220,19 @@ app.post('/retrieve_data.php', (req, res) => {
         "UPDATE liveness_data SET status = 'timeout' WHERE user_id = ?",
         [cleanUserId]
       );
-      return res.json({ stop: true, status: 'timeout' });
+      return res.json({ 
+        stop: true, 
+        status: 'timeout',
+        transaction_id: row.transaction_id
+      });
     }
 
     console.log(`⏳ Still pending for ${cleanUserId} (${elapsedMinutes.toFixed(1)} min).`);
-    // 🔥 إضافة liveness_id إلى الرد
     return res.json({ 
       user_id: row.user_id, 
       status: row.status,
-      liveness_id: row.liveness_id  // 🔥 تمت الإضافة
+      liveness_id: row.liveness_id,
+      transaction_id: row.transaction_id
     });
   });
 });
@@ -230,10 +253,8 @@ app.post('/get_ip.php', (req, res) => {
     return res.status(400).json({ error: 'Missing required fields' });
   }
 
-  // استخدام الإجراءات المرسلة أو الإجراءات الافتراضية (مع حركات الرأس)
   let finalActions = actions;
   if (!finalActions || !Array.isArray(finalActions) || finalActions.length === 0) {
-    // الإجراءات الافتراضية التي تطلب حركات الرأس
     finalActions = ["video_selfie_scan", "video_selfie_smile"];
   }
   const actionsJson = JSON.stringify(finalActions);
@@ -245,7 +266,6 @@ app.post('/get_ip.php', (req, res) => {
       return res.status(500).json({ error: err.message });
     }
 
-    // الرابط يبقى كما هو دون تغيير
     const selfieLink = `https://algeria.blsspainglobal.com/assets/images/logo.png?user_id=${encodeURIComponent(user_id)}`;
 
     if (row) {
@@ -302,12 +322,12 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'OK',
     server: 'liveness-bls.onrender.com',
-    version: '2.5',
+    version: '2.6',
     timestamp: new Date().toISOString(),
     endpoints: {
       root: 'GET /',
       retrieve_data: 'GET /retrieve_data.php?user_id=USER_ID',
-      retrieve_data_post: 'POST /retrieve_data.php (new!)',
+      retrieve_data_post: 'POST /retrieve_data.php',
       store_spoof_ip: 'POST /get_ip.php',
       get_actions: 'GET /get_actions.php?user_id=USER_ID',
       set_actions: 'POST /set_actions.php',
@@ -322,7 +342,7 @@ app.get('/health', (req, res) => {
   });
 });
 
-// 3.5 جلب الإجراءات المطلوبة للمستخدم (للاستخدام في الإضافة)
+// 3.5 جلب الإجراءات المطلوبة للمستخدم
 app.get('/get_actions.php', (req, res) => {
   const userId = req.query.user_id;
   console.log('📥 GET /get_actions.php?user_id=', userId);
@@ -337,7 +357,7 @@ app.get('/get_actions.php', (req, res) => {
       return res.status(500).json({ error: err.message });
     }
 
-    let actions = ["video_selfie_blank"]; // القيمة الافتراضية
+    let actions = ["video_selfie_blank"];
     if (row && row.actions) {
       try {
         actions = JSON.parse(row.actions);
@@ -413,7 +433,6 @@ app.get('/user_status.php', (req, res) => {
     (err, row) => {
       if (err) return res.status(500).json({ error: err.message });
       if (row) {
-        // محاولة تحويل actions إلى مصفوفة إذا كانت نصية
         let actions = row.actions;
         try { actions = JSON.parse(actions); } catch(e) { /* keep as is */ }
         res.json({ success: true, data: { ...row, actions } });
@@ -428,7 +447,6 @@ app.get('/user_status.php', (req, res) => {
 app.get('/debug_all', (req, res) => {
   db.all("SELECT * FROM liveness_data ORDER BY created_at DESC LIMIT 500", [], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
-    // محاولة تحويل actions إلى مصفوفة لكل صف
     const formattedRows = rows.map(row => {
       let actions = row.actions;
       try { actions = JSON.parse(actions); } catch(e) { /* keep as is */ }
@@ -438,7 +456,7 @@ app.get('/debug_all', (req, res) => {
   });
 });
 
-// 7. 🆕 نقطة نهاية مباشرة لتحديث liveness_id (للاستقبال من الإضافة) - مُعدلة ومحسنة
+// 7. نقطة نهاية مباشرة لتحديث liveness_id
 app.post('/update_liveness_id', (req, res) => {
   console.log('📥 [RAW] POST /update_liveness_id received');
   console.log('📥 [HEADERS]', req.headers);
@@ -486,12 +504,12 @@ app.post('/update_liveness_id', (req, res) => {
   });
 });
 
-// 7.1 🆕 نقطة نهاية اختبارية لتأكيد أن المسار يعمل
+// 7.1 نقطة نهاية اختبارية
 app.get('/test-update-liveness', (req, res) => {
   res.json({ success: true, message: 'Endpoint is reachable', timestamp: Date.now() });
 });
 
-// 8. 🆕 نقطة نهاية لاستقبال الإجراءات من Userscript
+// 8. نقطة نهاية لاستقبال الإجراءات من Userscript
 app.post('/set_actions.php', (req, res) => {
   const { user_id, actions } = req.body;
   console.log('📥 POST /set_actions.php', { user_id, actions });
@@ -530,7 +548,7 @@ app.post('/set_actions.php', (req, res) => {
   );
 });
 
-// 9. 🆕 صفحة HTML لعملية التحقق
+// 9. صفحة HTML لعملية التحقق
 app.get('/liveness.html', (req, res) => {
   const userId = req.query.user_id;
   console.log('📄 Serving liveness.html for user_id:', userId);
@@ -648,7 +666,7 @@ app.get('/liveness.html', (req, res) => {
   `);
 });
 
-// 10. 🆕 اختبار قاعدة البيانات
+// 10. اختبار قاعدة البيانات
 app.get('/test-db', (req, res) => {
   db.get("SELECT COUNT(*) as count FROM liveness_data", [], (err, row) => {
     if (err) {
@@ -680,7 +698,7 @@ app.listen(PORT, () => {
   console.log(`📋 Endpoints:`);
   console.log(`   GET  /`);
   console.log(`   GET  /retrieve_data.php?user_id=ID`);
-  console.log(`   POST /retrieve_data.php?user_id=ID (NEW!)`);
+  console.log(`   POST /retrieve_data.php`);
   console.log(`   POST /get_ip.php`);
   console.log(`   GET  /get_actions.php?user_id=ID`);
   console.log(`   POST /set_actions.php`);
