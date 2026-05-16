@@ -127,15 +127,16 @@ app.get('/retrieve_data.php', (req, res) => {
     const elapsedMinutes = (Date.now() - createdAt.getTime()) / 60000;
 
     if (row.status === 'completed') {
-      console.log(`✅ ${cleanUserId} completed — stop polling.`);
-      return res.json({ 
-        stop: true, 
-        status: 'completed',
-        liveness_id: row.liveness_id,
-        user_id: row.user_id,
-        transaction_id: row.transaction_id
-      });
-    }
+  console.log(`✅ ${cleanUserId} completed — stop polling.`);
+  return res.json({ 
+    stop: true, 
+    status: 'completed',
+    liveness_id: row.liveness_id,
+    user_id: row.user_id,
+    transaction_id: row.transaction_id,
+    spoof_ip: row.spoof_ip  
+  });
+}
 
     if (elapsedMinutes > 5) {
       console.log(`⏰ Timeout reached for ${cleanUserId} (${elapsedMinutes.toFixed(1)} min).`);
@@ -151,12 +152,13 @@ app.get('/retrieve_data.php', (req, res) => {
     }
 
     console.log(`⏳ Still pending for ${cleanUserId} (${elapsedMinutes.toFixed(1)} min).`);
-    return res.json({ 
-      user_id: row.user_id, 
-      status: row.status,
-      liveness_id: row.liveness_id,
-      transaction_id: row.transaction_id
-    });
+return res.json({ 
+  user_id: row.user_id, 
+  status: row.status,
+  liveness_id: row.liveness_id,
+  transaction_id: row.transaction_id,
+  spoof_ip: row.spoof_ip  // 🔥 أضف هذا السطر
+});
   });
 });
 
