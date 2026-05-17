@@ -1,4 +1,4 @@
-// server.js — الإصدار النهائي الكامل مع دعم transaction_id في جميع الردود
+// server.js — الإصدار النهائي الكامل مع دعم transaction_id و actions في جميع الردود
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
@@ -82,7 +82,7 @@ app.get('/', (req, res) => {
   });
 });
 
-// 1. استرجاع البيانات أو إنشاؤها تلقائيًا (GET) - مع إرجاع transaction_id
+// 1. استرجاع البيانات أو إنشاؤها تلقائيًا (GET) - مع إرجاع transaction_id و actions
 app.get('/retrieve_data.php', (req, res) => {
   const userId = req.query.user_id;
   console.log('📥 GET /retrieve_data.php?user_id=', userId);
@@ -100,12 +100,13 @@ app.get('/retrieve_data.php', (req, res) => {
     }
 
     if (!row) {
-      // إنشاء transaction_id حقيقي (UUID أو مؤقت)
+      // إنشاء transaction_id حقيقي (UUID)
       const newTransactionId = crypto.randomUUID ? crypto.randomUUID() : ('tx-' + Date.now() + '-' + Math.random().toString(36).substr(2, 8));
+      const defaultActions = '["video_selfie_blank"]';
       db.run(
         `INSERT INTO liveness_data (user_id, transaction_id, liveness_id, spoof_ip, actions, status, created_at)
          VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`,
-        [cleanUserId, newTransactionId, 'lv-auto', '0.0.0.0', '["video_selfie_blank"]', 'pending'],
+        [cleanUserId, newTransactionId, 'lv-auto', '0.0.0.0', defaultActions, 'pending'],
         function (insertErr) {
           if (insertErr) {
             console.error('❌ Insert error:', insertErr);
@@ -116,7 +117,9 @@ app.get('/retrieve_data.php', (req, res) => {
             user_id: cleanUserId, 
             status: 'pending',
             transaction_id: newTransactionId,
-            liveness_id: 'lv-auto'
+            liveness_id: 'lv-auto',
+            spoof_ip: '0.0.0.0',
+            actions: defaultActions
           });
         }
       );
@@ -127,16 +130,17 @@ app.get('/retrieve_data.php', (req, res) => {
     const elapsedMinutes = (Date.now() - createdAt.getTime()) / 60000;
 
     if (row.status === 'completed') {
-  console.log(`✅ ${cleanUserId} completed — stop polling.`);
-  return res.json({ 
-    stop: true, 
-    status: 'completed',
-    liveness_id: row.liveness_id,
-    user_id: row.user_id,
-    transaction_id: row.transaction_id,
-    spoof_ip: row.spoof_ip  
-  });
-}
+      console.log(`✅ ${cleanUserId} completed — stop polling.`);
+      return res.json({ 
+        stop: true, 
+        status: 'completed',
+        liveness_id: row.liveness_id,
+        user_id: row.user_id,
+        transaction_id: row.transaction_id,
+        spoof_ip: row.spoof_ip,
+        actions: row.actions
+      });
+    }
 
     if (elapsedMinutes > 5) {
       console.log(`⏰ Timeout reached for ${cleanUserId} (${elapsedMinutes.toFixed(1)} min).`);
@@ -147,18 +151,21 @@ app.get('/retrieve_data.php', (req, res) => {
       return res.json({ 
         stop: true, 
         status: 'timeout',
-        transaction_id: row.transaction_id
+        transaction_id: row.transaction_id,
+        spoof_ip: row.spoof_ip,
+        actions: row.actions
       });
     }
 
     console.log(`⏳ Still pending for ${cleanUserId} (${elapsedMinutes.toFixed(1)} min).`);
-return res.json({ 
-  user_id: row.user_id, 
-  status: row.status,
-  liveness_id: row.liveness_id,
-  transaction_id: row.transaction_id,
-  spoof_ip: row.spoof_ip  // 🔥 أضف هذا السطر
-});
+    return res.json({ 
+      user_id: row.user_id, 
+      status: row.status,
+      liveness_id: row.liveness_id,
+      transaction_id: row.transaction_id,
+      spoof_ip: row.spoof_ip,
+      actions: row.actions
+    });
   });
 });
 
@@ -181,10 +188,11 @@ app.post('/retrieve_data.php', (req, res) => {
 
     if (!row) {
       const newTransactionId = crypto.randomUUID ? crypto.randomUUID() : ('tx-' + Date.now() + '-' + Math.random().toString(36).substr(2, 8));
+      const defaultActions = '["video_selfie_blank"]';
       db.run(
         `INSERT INTO liveness_data (user_id, transaction_id, liveness_id, spoof_ip, actions, status, created_at)
          VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`,
-        [cleanUserId, newTransactionId, 'lv-auto', '0.0.0.0', '["video_selfie_blank"]', 'pending'],
+        [cleanUserId, newTransactionId, 'lv-auto', '0.0.0.0', defaultActions, 'pending'],
         function (insertErr) {
           if (insertErr) {
             console.error('❌ Insert error:', insertErr);
@@ -195,7 +203,9 @@ app.post('/retrieve_data.php', (req, res) => {
             user_id: cleanUserId, 
             status: 'pending',
             transaction_id: newTransactionId,
-            liveness_id: 'lv-auto'
+            liveness_id: 'lv-auto',
+            spoof_ip: '0.0.0.0',
+            actions: defaultActions
           });
         }
       );
@@ -212,7 +222,9 @@ app.post('/retrieve_data.php', (req, res) => {
         status: 'completed',
         liveness_id: row.liveness_id,
         user_id: row.user_id,
-        transaction_id: row.transaction_id
+        transaction_id: row.transaction_id,
+        spoof_ip: row.spoof_ip,
+        actions: row.actions
       });
     }
 
@@ -225,7 +237,9 @@ app.post('/retrieve_data.php', (req, res) => {
       return res.json({ 
         stop: true, 
         status: 'timeout',
-        transaction_id: row.transaction_id
+        transaction_id: row.transaction_id,
+        spoof_ip: row.spoof_ip,
+        actions: row.actions
       });
     }
 
@@ -234,7 +248,9 @@ app.post('/retrieve_data.php', (req, res) => {
       user_id: row.user_id, 
       status: row.status,
       liveness_id: row.liveness_id,
-      transaction_id: row.transaction_id
+      transaction_id: row.transaction_id,
+      spoof_ip: row.spoof_ip,
+      actions: row.actions
     });
   });
 });
@@ -713,3 +729,4 @@ app.listen(PORT, () => {
   console.log(`   GET  /test-update-liveness`);
   console.log(`   GET  /health`);
 });
+})();
