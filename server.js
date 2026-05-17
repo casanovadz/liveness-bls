@@ -45,7 +45,6 @@ const db = new sqlite3.Database(dbPath, (err) => {
 });
 
 db.serialize(() => {
-  // إنشاء الجدول مع إضافة عمود actions
   db.run(`CREATE TABLE IF NOT EXISTS liveness_data (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id TEXT UNIQUE,
@@ -61,10 +60,8 @@ db.serialize(() => {
     else console.log('✅ Table ready');
   });
 
-  // إضافة عمود actions إذا كان غير موجود (للقواعد القديمة)
   db.run(`ALTER TABLE liveness_data ADD COLUMN actions TEXT DEFAULT '["video_selfie_blank"]'`, (err) => {
     if (err && !err.message.includes('duplicate column')) {
-      // العمود موجود بالفعل أو خطأ آخر غير التكرار
     } else if (!err) {
       console.log('✅ Actions column added');
     }
@@ -82,7 +79,7 @@ app.get('/', (req, res) => {
   });
 });
 
-// 1. استرجاع البيانات أو إنشاؤها تلقائيًا (GET) - مع إرجاع transaction_id و actions
+// 1. استرجاع البيانات أو إنشاؤها تلقائيًا (GET)
 app.get('/retrieve_data.php', (req, res) => {
   const userId = req.query.user_id;
   console.log('📥 GET /retrieve_data.php?user_id=', userId);
@@ -100,7 +97,6 @@ app.get('/retrieve_data.php', (req, res) => {
     }
 
     if (!row) {
-      // إنشاء transaction_id حقيقي (UUID)
       const newTransactionId = crypto.randomUUID ? crypto.randomUUID() : ('tx-' + Date.now() + '-' + Math.random().toString(36).substr(2, 8));
       const defaultActions = '["video_selfie_blank"]';
       db.run(
@@ -255,7 +251,7 @@ app.post('/retrieve_data.php', (req, res) => {
   });
 });
 
-// 2. تخزين أو تحديث بيانات IP المزيف + إرجاع رابط مباشر للعميل (مع دعم actions)
+// 2. تخزين أو تحديث بيانات IP المزيف
 app.post('/get_ip.php', (req, res) => {
   const data = req.body;
   console.log('📤 POST /get_ip.php', data);
@@ -452,7 +448,7 @@ app.get('/user_status.php', (req, res) => {
       if (err) return res.status(500).json({ error: err.message });
       if (row) {
         let actions = row.actions;
-        try { actions = JSON.parse(actions); } catch(e) { /* keep as is */ }
+        try { actions = JSON.parse(actions); } catch(e) { }
         res.json({ success: true, data: { ...row, actions } });
       } else {
         res.json({ success: false, message: 'لم يتم العثور على بيانات للمستخدم' });
@@ -467,7 +463,7 @@ app.get('/debug_all', (req, res) => {
     if (err) return res.status(500).json({ error: err.message });
     const formattedRows = rows.map(row => {
       let actions = row.actions;
-      try { actions = JSON.parse(actions); } catch(e) { /* keep as is */ }
+      try { actions = JSON.parse(actions); } catch(e) { }
       return { ...row, actions };
     });
     res.json(formattedRows);
@@ -696,18 +692,16 @@ app.get('/test-db', (req, res) => {
 
 // ---------- تنظيف تلقائي ----------
 setInterval(() => {
-  // حذف كل السجلات الأقدم من ساعتين
   db.run("DELETE FROM liveness_data WHERE created_at < datetime('now', '-2 hours')", (err) => {
     if (err) console.error('❌ Error cleaning old data:', err);
     else console.log('🧹 Deleted old (>2h) data');
   });
 
-  // حذف السجلات التي حالتها pending منذ أكثر من 10 دقائق
   db.run("DELETE FROM liveness_data WHERE status = 'pending' AND created_at < datetime('now', '-10 minutes')", (err) => {
     if (err) console.error('❌ Error cleaning pending data:', err);
     else console.log('🕒 Removed stale pending records (>10min old)');
   });
-}, 300000); // كل 5 دقائق
+}, 300000);
 
 // ---------- بدء الخادم ----------
 app.listen(PORT, () => {
@@ -729,4 +723,3 @@ app.listen(PORT, () => {
   console.log(`   GET  /test-update-liveness`);
   console.log(`   GET  /health`);
 });
-})();
