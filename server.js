@@ -1,4 +1,4 @@
-// server.js — الإصدار النهائي الكامل مع دعم transaction_id و actions في جميع الردود
+// server.js — الإصدار النهائي الكامل مع دعم منع التكرار
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
@@ -336,7 +336,7 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'OK',
     server: 'liveness-bls.onrender.com',
-    version: '2.6',
+    version: '2.7',
     timestamp: new Date().toISOString(),
     endpoints: {
       root: 'GET /',
@@ -470,14 +470,12 @@ app.get('/debug_all', (req, res) => {
   });
 });
 
-// 7. نقطة نهاية مباشرة لتحديث liveness_id
+// 7. نقطة نهاية مباشرة لتحديث liveness_id (معدلة لمنع التكرار)
 app.post('/update_liveness_id', (req, res) => {
   console.log('📥 [RAW] POST /update_liveness_id received');
-  console.log('📥 [HEADERS]', req.headers);
   console.log('📥 [BODY]', req.body);
   
   const { user_id, liveness_id, transaction_id, spoof_ip } = req.body;
-  console.log('📥 [UPDATE] POST /update_liveness_id', { user_id, liveness_id, transaction_id, spoof_ip });
 
   if (!user_id || !liveness_id) {
     return res.status(400).json({ 
@@ -489,31 +487,52 @@ app.post('/update_liveness_id', (req, res) => {
   const cleanUserId = String(user_id).trim();
   const cleanLivenessId = String(liveness_id).trim();
 
-  const updateSql = `
-    INSERT INTO liveness_data (user_id, transaction_id, liveness_id, spoof_ip, status, created_at)
-    VALUES (?, ?, ?, ?, 'completed', datetime('now'))
-    ON CONFLICT(user_id) DO UPDATE SET
-      liveness_id = excluded.liveness_id,
-      transaction_id = COALESCE(excluded.transaction_id, transaction_id),
-      spoof_ip = COALESCE(excluded.spoof_ip, spoof_ip),
-      status = 'completed',
-      created_at = datetime('now')
-  `;
-
-  db.run(updateSql, [cleanUserId, transaction_id || 'tx-auto', cleanLivenessId, spoof_ip || '0.0.0.0'], function(err) {
+  // 🔥 التحقق من عدم تكرار نفس liveness_id لنفس user_id
+  db.get("SELECT liveness_id, status FROM liveness_data WHERE user_id = ?", [cleanUserId], (err, row) => {
     if (err) {
-      console.error('❌ Failed to update liveness_id:', err);
+      console.error('❌ Database error:', err);
       return res.status(500).json({ success: false, error: err.message });
     }
-    
-    console.log(`✅ Liveness ID ${cleanLivenessId} stored for user ${cleanUserId}`);
-    
-    res.json({ 
-      success: true, 
-      message: 'Liveness ID updated successfully',
-      user_id: cleanUserId,
-      liveness_id: cleanLivenessId,
-      status: 'completed'
+
+    // إذا كان الـ liveness_id موجوداً بالفعل ولم يتغير، نعيد نجاح بدون تحديث
+    if (row && row.liveness_id === cleanLivenessId && row.status === 'completed') {
+      console.log(`⚠️ Duplicate request ignored for user ${cleanUserId} with same liveness_id`);
+      return res.json({ 
+        success: true, 
+        message: 'Liveness ID already stored (duplicate ignored)',
+        user_id: cleanUserId,
+        liveness_id: cleanLivenessId,
+        status: 'completed',
+        duplicate: true
+      });
+    }
+
+    const updateSql = `
+      INSERT INTO liveness_data (user_id, transaction_id, liveness_id, spoof_ip, status, created_at)
+      VALUES (?, ?, ?, ?, 'completed', datetime('now'))
+      ON CONFLICT(user_id) DO UPDATE SET
+        liveness_id = excluded.liveness_id,
+        transaction_id = COALESCE(excluded.transaction_id, transaction_id),
+        spoof_ip = COALESCE(excluded.spoof_ip, spoof_ip),
+        status = 'completed',
+        created_at = datetime('now')
+    `;
+
+    db.run(updateSql, [cleanUserId, transaction_id || 'tx-auto', cleanLivenessId, spoof_ip || '0.0.0.0'], function(err) {
+      if (err) {
+        console.error('❌ Failed to update liveness_id:', err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
+      
+      console.log(`✅ Liveness ID ${cleanLivenessId} stored for user ${cleanUserId}`);
+      
+      res.json({ 
+        success: true, 
+        message: 'Liveness ID updated successfully',
+        user_id: cleanUserId,
+        liveness_id: cleanLivenessId,
+        status: 'completed'
+      });
     });
   });
 });
@@ -523,7 +542,7 @@ app.get('/test-update-liveness', (req, res) => {
   res.json({ success: true, message: 'Endpoint is reachable', timestamp: Date.now() });
 });
 
-// 8. نقطة نهاية لاستقبال الإجراءات من Userscript
+// 8. نقطة نهاية لاستقبال الإجراءات من Userscript (معدلة لمنع التكرار)
 app.post('/set_actions.php', (req, res) => {
   const { user_id, actions } = req.body;
   console.log('📥 POST /set_actions.php', { user_id, actions });
@@ -537,29 +556,48 @@ app.post('/set_actions.php', (req, res) => {
 
   const actionsJson = JSON.stringify(actions);
 
-  db.run(
-    `INSERT INTO liveness_data (user_id, actions, status, created_at)
-     VALUES (?, ?, 'pending', datetime('now'))
-     ON CONFLICT(user_id) DO UPDATE SET
-       actions = excluded.actions,
-       status = 'pending',
-       created_at = datetime('now')`,
-    [user_id, actionsJson],
-    function(err) {
-      if (err) {
-        console.error('❌ Failed to set actions:', err);
-        return res.status(500).json({ success: false, error: err.message });
-      }
-      
-      console.log(`✅ Actions set for user ${user_id}:`, actions);
-      res.json({ 
+  // 🔥 التحقق من عدم تكرار نفس الإجراءات
+  db.get("SELECT actions FROM liveness_data WHERE user_id = ?", [user_id], (err, row) => {
+    if (err) {
+      console.error('❌ Database error:', err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+
+    // إذا كانت الإجراءات متطابقة، نعيد نجاح بدون تحديث
+    if (row && row.actions === actionsJson) {
+      console.log(`⚠️ Duplicate actions ignored for user ${user_id}`);
+      return res.json({ 
         success: true, 
-        message: 'Actions set successfully',
+        message: 'Actions already set (duplicate ignored)',
         user_id: user_id,
         actions: actions
       });
     }
-  );
+
+    db.run(
+      `INSERT INTO liveness_data (user_id, actions, status, created_at)
+       VALUES (?, ?, 'pending', datetime('now'))
+       ON CONFLICT(user_id) DO UPDATE SET
+         actions = excluded.actions,
+         status = 'pending',
+         created_at = datetime('now')`,
+      [user_id, actionsJson],
+      function(err) {
+        if (err) {
+          console.error('❌ Failed to set actions:', err);
+          return res.status(500).json({ success: false, error: err.message });
+        }
+        
+        console.log(`✅ Actions set for user ${user_id}:`, actions);
+        res.json({ 
+          success: true, 
+          message: 'Actions set successfully',
+          user_id: user_id,
+          actions: actions
+        });
+      }
+    );
+  });
 });
 
 // 9. صفحة HTML لعملية التحقق
