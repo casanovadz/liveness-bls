@@ -1,4 +1,4 @@
-// server.js — الإصدار النهائي الكامل مع دعم منع التكرار
+// server.js — الإصدار النهائي (بدون أي قيم افتراضية)
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
@@ -52,19 +52,12 @@ db.serialize(() => {
     liveness_id TEXT,
     spoof_ip TEXT,
     client_ip TEXT,
-    actions TEXT DEFAULT '["video_selfie_blank"]',
+    actions TEXT,
     status TEXT DEFAULT 'pending',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`, (err) => {
     if (err) console.error('❌ Error creating table:', err);
     else console.log('✅ Table ready');
-  });
-
-  db.run(`ALTER TABLE liveness_data ADD COLUMN actions TEXT DEFAULT '["video_selfie_blank"]'`, (err) => {
-    if (err && !err.message.includes('duplicate column')) {
-    } else if (!err) {
-      console.log('✅ Actions column added');
-    }
   });
 });
 
@@ -79,7 +72,7 @@ app.get('/', (req, res) => {
   });
 });
 
-// 1. استرجاع البيانات أو إنشاؤها تلقائيًا (GET)
+// 1. استرجاع البيانات (GET) - بدون قيم افتراضية
 app.get('/retrieve_data.php', (req, res) => {
   const userId = req.query.user_id;
   console.log('📥 GET /retrieve_data.php?user_id=', userId);
@@ -97,29 +90,13 @@ app.get('/retrieve_data.php', (req, res) => {
     }
 
     if (!row) {
-      const newTransactionId = crypto.randomUUID ? crypto.randomUUID() : ('tx-' + Date.now() + '-' + Math.random().toString(36).substr(2, 8));
-      const defaultActions = '["video_selfie_blank"]';
-      db.run(
-        `INSERT INTO liveness_data (user_id, transaction_id, liveness_id, spoof_ip, actions, status, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`,
-        [cleanUserId, newTransactionId, 'lv-auto', '0.0.0.0', defaultActions, 'pending'],
-        function (insertErr) {
-          if (insertErr) {
-            console.error('❌ Insert error:', insertErr);
-            return res.status(500).json({ error: insertErr.message });
-          }
-          console.log(`🆕 Created new pending record for user_id: ${cleanUserId} with transaction_id: ${newTransactionId}`);
-          return res.json({ 
-            user_id: cleanUserId, 
-            status: 'pending',
-            transaction_id: newTransactionId,
-            liveness_id: 'lv-auto',
-            spoof_ip: '0.0.0.0',
-            actions: defaultActions
-          });
-        }
-      );
-      return;
+      // ❌ لم يتم العثور على المستخدم - نعيد خطأ بدلاً من إنشاء سجل افتراضي
+      console.log(`❌ User ${cleanUserId} not found in database`);
+      return res.status(404).json({ 
+        error: 'User not found', 
+        user_id: cleanUserId,
+        message: 'لم يتم العثور على المستخدم. يرجى الضغط على Get Code أولاً.'
+      });
     }
 
     const createdAt = new Date(row.created_at);
@@ -134,7 +111,7 @@ app.get('/retrieve_data.php', (req, res) => {
         user_id: row.user_id,
         transaction_id: row.transaction_id,
         spoof_ip: row.spoof_ip,
-        actions: row.actions
+        actions: row.actions ? JSON.parse(row.actions) : null
       });
     }
 
@@ -149,7 +126,7 @@ app.get('/retrieve_data.php', (req, res) => {
         status: 'timeout',
         transaction_id: row.transaction_id,
         spoof_ip: row.spoof_ip,
-        actions: row.actions
+        actions: row.actions ? JSON.parse(row.actions) : null
       });
     }
 
@@ -160,12 +137,12 @@ app.get('/retrieve_data.php', (req, res) => {
       liveness_id: row.liveness_id,
       transaction_id: row.transaction_id,
       spoof_ip: row.spoof_ip,
-      actions: row.actions
+      actions: row.actions ? JSON.parse(row.actions) : null
     });
   });
 });
 
-// 1.1 دعم POST لنفس المسار
+// 1.1 دعم POST لنفس المسار - بدون قيم افتراضية
 app.post('/retrieve_data.php', (req, res) => {
   const userId = req.body.user_id || req.query.user_id;
   console.log('📥 POST /retrieve_data.php?user_id=', userId);
@@ -183,29 +160,13 @@ app.post('/retrieve_data.php', (req, res) => {
     }
 
     if (!row) {
-      const newTransactionId = crypto.randomUUID ? crypto.randomUUID() : ('tx-' + Date.now() + '-' + Math.random().toString(36).substr(2, 8));
-      const defaultActions = '["video_selfie_blank"]';
-      db.run(
-        `INSERT INTO liveness_data (user_id, transaction_id, liveness_id, spoof_ip, actions, status, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`,
-        [cleanUserId, newTransactionId, 'lv-auto', '0.0.0.0', defaultActions, 'pending'],
-        function (insertErr) {
-          if (insertErr) {
-            console.error('❌ Insert error:', insertErr);
-            return res.status(500).json({ error: insertErr.message });
-          }
-          console.log(`🆕 Created new pending record for user_id: ${cleanUserId} with transaction_id: ${newTransactionId}`);
-          return res.json({ 
-            user_id: cleanUserId, 
-            status: 'pending',
-            transaction_id: newTransactionId,
-            liveness_id: 'lv-auto',
-            spoof_ip: '0.0.0.0',
-            actions: defaultActions
-          });
-        }
-      );
-      return;
+      // ❌ لم يتم العثور على المستخدم - نعيد خطأ بدلاً من إنشاء سجل افتراضي
+      console.log(`❌ User ${cleanUserId} not found in database`);
+      return res.status(404).json({ 
+        error: 'User not found', 
+        user_id: cleanUserId,
+        message: 'لم يتم العثور على المستخدم. يرجى الضغط على Get Code أولاً.'
+      });
     }
 
     const createdAt = new Date(row.created_at);
@@ -220,7 +181,7 @@ app.post('/retrieve_data.php', (req, res) => {
         user_id: row.user_id,
         transaction_id: row.transaction_id,
         spoof_ip: row.spoof_ip,
-        actions: row.actions
+        actions: row.actions ? JSON.parse(row.actions) : null
       });
     }
 
@@ -235,7 +196,7 @@ app.post('/retrieve_data.php', (req, res) => {
         status: 'timeout',
         transaction_id: row.transaction_id,
         spoof_ip: row.spoof_ip,
-        actions: row.actions
+        actions: row.actions ? JSON.parse(row.actions) : null
       });
     }
 
@@ -246,12 +207,12 @@ app.post('/retrieve_data.php', (req, res) => {
       liveness_id: row.liveness_id,
       transaction_id: row.transaction_id,
       spoof_ip: row.spoof_ip,
-      actions: row.actions
+      actions: row.actions ? JSON.parse(row.actions) : null
     });
   });
 });
 
-// 2. تخزين أو تحديث بيانات IP المزيف
+// 2. تخزين أو تحديث بيانات IP المزيف - بدون قيم افتراضية
 app.post('/get_ip.php', (req, res) => {
   const data = req.body;
   console.log('📤 POST /get_ip.php', data);
@@ -263,16 +224,31 @@ app.post('/get_ip.php', (req, res) => {
   const item = data[0];
   const { spoof_ip, user_id, transaction_id, liveness_id, actions } = item || {};
 
-  if (!user_id || !transaction_id || !spoof_ip) {
-    return res.status(400).json({ error: 'Missing required fields' });
+  if (!user_id) {
+    return res.status(400).json({ error: 'user_id is required' });
   }
 
-  let finalActions = actions;
-  if (!finalActions || !Array.isArray(finalActions) || finalActions.length === 0) {
-    finalActions = ["video_selfie_scan", "video_selfie_smile"];
+  if (!transaction_id) {
+    return res.status(400).json({ error: 'transaction_id is required' });
   }
-  const actionsJson = JSON.stringify(finalActions);
-  console.log(`🎭 Actions for ${user_id}:`, finalActions);
+
+  if (!spoof_ip) {
+    return res.status(400).json({ error: 'spoof_ip is required' });
+  }
+
+  // ❌ لا نستخدم أي قيم افتراضية - يجب أن تأتي actions من المستخدم
+  if (!actions || !Array.isArray(actions) || actions.length === 0) {
+    console.error(`❌ No actions provided for user ${user_id}`);
+    return res.status(400).json({ 
+      error: 'actions array is required', 
+      message: 'يجب إرسال الإجراءات المطلوبة. لا يمكن استخدام قيم افتراضية.'
+    });
+  }
+
+  const actionsJson = JSON.stringify(actions);
+  console.log(`🎭 Actions received for ${user_id}:`, actions);
+
+  const selfieLink = `https://algeria.blsspainglobal.com/assets/images/logo.png?user_id=${encodeURIComponent(user_id)}`;
 
   db.get("SELECT id FROM liveness_data WHERE user_id = ?", [user_id], (err, row) => {
     if (err) {
@@ -280,14 +256,12 @@ app.post('/get_ip.php', (req, res) => {
       return res.status(500).json({ error: err.message });
     }
 
-    const selfieLink = `https://algeria.blsspainglobal.com/assets/images/logo.png?user_id=${encodeURIComponent(user_id)}`;
-
     if (row) {
       db.run(
         `UPDATE liveness_data
          SET transaction_id = ?, liveness_id = ?, spoof_ip = ?, actions = ?, status = 'updated', created_at = datetime('now')
          WHERE user_id = ?`,
-        [transaction_id, liveness_id, spoof_ip, actionsJson, user_id],
+        [transaction_id, liveness_id || null, spoof_ip, actionsJson, user_id],
         function (updateErr) {
           if (updateErr) {
             console.error('❌ Update error:', updateErr);
@@ -300,7 +274,7 @@ app.post('/get_ip.php', (req, res) => {
             user_id,
             transaction_id,
             liveness_id,
-            actions: finalActions,
+            actions: actions,
             link: selfieLink
           });
         }
@@ -309,7 +283,7 @@ app.post('/get_ip.php', (req, res) => {
       db.run(
         `INSERT INTO liveness_data (user_id, transaction_id, liveness_id, spoof_ip, actions, status, created_at)
          VALUES (?, ?, ?, ?, ?, 'pending', datetime('now'))`,
-        [user_id, transaction_id, liveness_id, spoof_ip, actionsJson],
+        [user_id, transaction_id, liveness_id || null, spoof_ip, actionsJson],
         function (insertErr) {
           if (insertErr) {
             console.error('❌ Insert error:', insertErr);
@@ -322,7 +296,7 @@ app.post('/get_ip.php', (req, res) => {
             user_id,
             transaction_id,
             liveness_id,
-            actions: finalActions,
+            actions: actions,
             link: selfieLink
           });
         }
@@ -336,7 +310,8 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'OK',
     server: 'liveness-bls.onrender.com',
-    version: '2.7',
+    version: '3.0',
+    note: 'No default values - all data must be provided by client',
     timestamp: new Date().toISOString(),
     endpoints: {
       root: 'GET /',
@@ -356,7 +331,7 @@ app.get('/health', (req, res) => {
   });
 });
 
-// 3.5 جلب الإجراءات المطلوبة للمستخدم
+// 3.5 جلب الإجراءات المطلوبة للمستخدم - بدون قيم افتراضية
 app.get('/get_actions.php', (req, res) => {
   const userId = req.query.user_id;
   console.log('📥 GET /get_actions.php?user_id=', userId);
@@ -371,23 +346,29 @@ app.get('/get_actions.php', (req, res) => {
       return res.status(500).json({ error: err.message });
     }
 
-    let actions = ["video_selfie_blank"];
-    if (row && row.actions) {
-      try {
-        actions = JSON.parse(row.actions);
-        console.log(`✅ Actions retrieved for ${userId}:`, actions);
-      } catch(e) {
-        console.error('Error parsing actions:', e);
-      }
-    } else {
-      console.log(`ℹ️ No actions found for ${userId}, using defaults`);
+    if (!row || !row.actions) {
+      // ❌ لم يتم العثور على إجراءات - نعيد خطأ بدلاً من قيم افتراضية
+      console.log(`❌ No actions found for user ${userId}`);
+      return res.status(404).json({
+        success: false,
+        error: 'No actions found for this user',
+        user_id: userId,
+        message: 'لم يتم العثور على إجراءات. يرجى الضغط على Get Code أولاً.'
+      });
     }
 
-    res.json({
-      success: true,
-      user_id: userId,
-      actions: actions
-    });
+    try {
+      const actions = JSON.parse(row.actions);
+      console.log(`✅ Actions retrieved for ${userId}:`, actions);
+      res.json({
+        success: true,
+        user_id: userId,
+        actions: actions
+      });
+    } catch(e) {
+      console.error('Error parsing actions:', e);
+      res.status(500).json({ error: 'Invalid actions format in database' });
+    }
   });
 });
 
@@ -396,11 +377,16 @@ app.post('/update_liveness.php', (req, res) => {
   const { user_id, liveness_id, spoof_ip, transaction_id } = req.body;
   console.log('📥 POST /update_liveness.php', req.body);
 
-  if (!user_id || !liveness_id || !transaction_id) {
-    return res.status(400).json({
-      success: false,
-      message: 'بيانات ناقصة: user_id, liveness_id, transaction_id مطلوبة'
-    });
+  if (!user_id) {
+    return res.status(400).json({ success: false, message: 'user_id is required' });
+  }
+
+  if (!liveness_id) {
+    return res.status(400).json({ success: false, message: 'liveness_id is required' });
+  }
+
+  if (!transaction_id) {
+    return res.status(400).json({ success: false, message: 'transaction_id is required' });
   }
 
   db.run(
@@ -415,19 +401,28 @@ app.post('/update_liveness.php', (req, res) => {
       }
 
       if (this.changes === 0) {
-        db.run(
-          `INSERT INTO liveness_data (user_id, transaction_id, liveness_id, spoof_ip, status, created_at)
-           VALUES (?, ?, ?, ?, 'completed', datetime('now'))`,
-          [user_id, transaction_id, liveness_id, spoof_ip],
-          function (insertErr) {
-            if (insertErr) {
-              console.error('❌ Insert error:', insertErr);
-              return res.status(500).json({ success: false, message: insertErr.message });
-            }
-            console.log('✅ New record created - ID:', this.lastID);
-            res.json({ success: true, message: 'تم حفظ نتائج التحقق بنجاح', id: this.lastID, status: 'completed' });
+        // التحقق من وجود user_id على الأقل
+        db.get("SELECT id FROM liveness_data WHERE user_id = ?", [user_id], (existsErr, row) => {
+          if (existsErr || !row) {
+            return res.status(404).json({ 
+              success: false, 
+              message: 'User not found. Please create session first using set_actions.php' 
+            });
           }
-        );
+          
+          db.run(
+            `UPDATE liveness_data SET liveness_id = ?, status = 'completed' WHERE user_id = ?`,
+            [liveness_id, user_id],
+            function(updateErr) {
+              if (updateErr) {
+                console.error('❌ Update error:', updateErr);
+                return res.status(500).json({ success: false, message: updateErr.message });
+              }
+              console.log('✅ Liveness results updated - changes:', this.changes);
+              res.json({ success: true, message: 'تم تحديث نتائج التحقق بنجاح', changes: this.changes, status: 'completed' });
+            }
+          );
+        });
       } else {
         console.log('✅ Liveness results updated - changes:', this.changes);
         res.json({ success: true, message: 'تم تحديث نتائج التحقق بنجاح', changes: this.changes, status: 'completed' });
@@ -470,32 +465,48 @@ app.get('/debug_all', (req, res) => {
   });
 });
 
-// 7. نقطة نهاية مباشرة لتحديث liveness_id (معدلة لمنع التكرار)
+// 7. نقطة نهاية مباشرة لتحديث liveness_id (معدلة لمنع التكرار وبدون قيم افتراضية)
 app.post('/update_liveness_id', (req, res) => {
   console.log('📥 [RAW] POST /update_liveness_id received');
   console.log('📥 [BODY]', req.body);
   
   const { user_id, liveness_id, transaction_id, spoof_ip } = req.body;
 
-  if (!user_id || !liveness_id) {
+  if (!user_id) {
     return res.status(400).json({ 
       success: false, 
-      error: 'user_id and liveness_id are required' 
+      error: 'user_id is required' 
+    });
+  }
+
+  if (!liveness_id) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'liveness_id is required' 
     });
   }
 
   const cleanUserId = String(user_id).trim();
   const cleanLivenessId = String(liveness_id).trim();
 
-  // 🔥 التحقق من عدم تكرار نفس liveness_id لنفس user_id
-  db.get("SELECT liveness_id, status FROM liveness_data WHERE user_id = ?", [cleanUserId], (err, row) => {
+  // التحقق من وجود المستخدم أولاً
+  db.get("SELECT id, liveness_id, status FROM liveness_data WHERE user_id = ?", [cleanUserId], (err, row) => {
     if (err) {
       console.error('❌ Database error:', err);
       return res.status(500).json({ success: false, error: err.message });
     }
 
+    if (!row) {
+      console.log(`❌ User ${cleanUserId} not found in database`);
+      return res.status(404).json({ 
+        success: false, 
+        error: 'User not found. Please create session first using set_actions.php',
+        user_id: cleanUserId
+      });
+    }
+
     // إذا كان الـ liveness_id موجوداً بالفعل ولم يتغير، نعيد نجاح بدون تحديث
-    if (row && row.liveness_id === cleanLivenessId && row.status === 'completed') {
+    if (row.liveness_id === cleanLivenessId && row.status === 'completed') {
       console.log(`⚠️ Duplicate request ignored for user ${cleanUserId} with same liveness_id`);
       return res.json({ 
         success: true, 
@@ -508,17 +519,16 @@ app.post('/update_liveness_id', (req, res) => {
     }
 
     const updateSql = `
-      INSERT INTO liveness_data (user_id, transaction_id, liveness_id, spoof_ip, status, created_at)
-      VALUES (?, ?, ?, ?, 'completed', datetime('now'))
-      ON CONFLICT(user_id) DO UPDATE SET
-        liveness_id = excluded.liveness_id,
-        transaction_id = COALESCE(excluded.transaction_id, transaction_id),
-        spoof_ip = COALESCE(excluded.spoof_ip, spoof_ip),
-        status = 'completed',
-        created_at = datetime('now')
+      UPDATE liveness_data 
+      SET liveness_id = ?, 
+          transaction_id = COALESCE(?, transaction_id),
+          spoof_ip = COALESCE(?, spoof_ip),
+          status = 'completed',
+          created_at = datetime('now')
+      WHERE user_id = ?
     `;
 
-    db.run(updateSql, [cleanUserId, transaction_id || 'tx-auto', cleanLivenessId, spoof_ip || '0.0.0.0'], function(err) {
+    db.run(updateSql, [cleanLivenessId, transaction_id, spoof_ip, cleanUserId], function(err) {
       if (err) {
         console.error('❌ Failed to update liveness_id:', err);
         return res.status(500).json({ success: false, error: err.message });
@@ -542,21 +552,28 @@ app.get('/test-update-liveness', (req, res) => {
   res.json({ success: true, message: 'Endpoint is reachable', timestamp: Date.now() });
 });
 
-// 8. نقطة نهاية لاستقبال الإجراءات من Userscript (معدلة لمنع التكرار)
+// 8. نقطة نهاية لاستقبال الإجراءات من Userscript (معدلة لمنع التكرار وبدون قيم افتراضية)
 app.post('/set_actions.php', (req, res) => {
   const { user_id, actions } = req.body;
   console.log('📥 POST /set_actions.php', { user_id, actions });
 
-  if (!user_id || !actions || !Array.isArray(actions)) {
+  if (!user_id) {
     return res.status(400).json({ 
       success: false, 
-      error: 'user_id and actions array are required' 
+      error: 'user_id is required' 
+    });
+  }
+
+  if (!actions || !Array.isArray(actions) || actions.length === 0) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'actions array is required and cannot be empty' 
     });
   }
 
   const actionsJson = JSON.stringify(actions);
 
-  // 🔥 التحقق من عدم تكرار نفس الإجراءات
+  // التحقق من عدم تكرار نفس الإجراءات
   db.get("SELECT actions FROM liveness_data WHERE user_id = ?", [user_id], (err, row) => {
     if (err) {
       console.error('❌ Database error:', err);
@@ -600,11 +617,25 @@ app.post('/set_actions.php', (req, res) => {
   });
 });
 
-// 9. صفحة HTML لعملية التحقق
+// 9. صفحة HTML لعملية التحقق - بدون قيم افتراضية
 app.get('/liveness.html', (req, res) => {
   const userId = req.query.user_id;
   console.log('📄 Serving liveness.html for user_id:', userId);
   
+  if (!userId) {
+    return res.status(400).send(`
+      <!DOCTYPE html>
+      <html>
+      <head><meta charset="UTF-8"><title>Error</title></head>
+      <body style="font-family:Arial;text-align:center;padding:50px;">
+        <h1>❌ Error</h1>
+        <p>Missing user_id parameter</p>
+        <p>Please use: /liveness.html?user_id=YOUR_USER_ID</p>
+      </body>
+      </html>
+    `);
+  }
+
   res.send(`
 <!DOCTYPE html>
 <html>
@@ -619,26 +650,54 @@ app.get('/liveness.html', (req, res) => {
         #status { margin-top: 20px; padding: 10px; border-radius: 8px; }
         .loading { display: inline-block; width: 20px; height: 20px; border: 3px solid #f3f3f3; border-top: 3px solid #28a745; border-radius: 50%; animation: spin 1s linear infinite; margin-right: 10px; vertical-align: middle; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .error { color: #ff6b6b; }
     </style>
     <script src="https://web-sdk.prod.cdn.spain.ozforensics.com/blsinternational/plugin_liveness.php"></script>
 </head>
 <body>
     <div class="container">
         <h1>📸 Liveness Verification</h1>
-        <p>User ID: ${userId || 'Not specified'}</p>
-        <div id="status">🔄 Loading...</div>
+        <p>User ID: ${userId}</p>
+        <div id="status">🔄 Loading actions from server...</div>
         <button id="startBtn" style="display:none;">Start Verification</button>
     </div>
     <script>
-        const userId = "${userId || ''}";
+        const userId = "${userId}";
         const UPDATE_URL = "https://liveness-bls.onrender.com/update_liveness_id";
+        const GET_ACTIONS_URL = "https://liveness-bls.onrender.com/get_actions.php?user_id=" + userId;
         let ozStarted = false;
         let retryCount = 0;
+        let userActions = null;
         
         function updateStatus(msg, isError = false) {
             const statusDiv = document.getElementById('status');
             statusDiv.innerHTML = msg;
             statusDiv.style.background = isError ? '#dc354520' : '#28a74520';
+            if (isError) statusDiv.style.color = '#ff6b6b';
+            else statusDiv.style.color = '#white';
+        }
+        
+        async function fetchActions() {
+            updateStatus('📡 Fetching required actions from server...');
+            try {
+                const response = await fetch(GET_ACTIONS_URL);
+                if (!response.ok) {
+                    throw new Error('Server returned ' + response.status);
+                }
+                const data = await response.json();
+                if (data.success && data.actions && data.actions.length > 0) {
+                    userActions = data.actions;
+                    console.log('✅ Actions received:', userActions);
+                    updateStatus('✅ Actions loaded: ' + userActions.join(' → '));
+                    return true;
+                } else {
+                    throw new Error('No actions received from server');
+                }
+            } catch(err) {
+                console.error('Failed to fetch actions:', err);
+                updateStatus('❌ Failed to load actions: ' + err.message, true);
+                return false;
+            }
         }
         
         async function sendToServer(livenessId) {
@@ -682,13 +741,20 @@ app.get('/liveness.html', (req, res) => {
                 return;
             }
             
+            if (!userActions || userActions.length === 0) {
+                updateStatus('❌ No actions available to perform', true);
+                return;
+            }
+            
+            console.log('🎯 Starting OzLiveness with actions:', userActions);
+            
             OzLiveness.open({
                 lang: 'en',
                 meta: { user_id: userId, transaction_id: 'liveness-' + Date.now() },
                 overlay_options: true,
-                action: ["video_selfie_high", "video_selfie_eyes"],
+                action: userActions,
                 on_ready: () => updateStatus('✅ Camera ready! Follow instructions.'),
-                on_action_start: (action) => updateStatus('🎯 ' + action),
+                on_action_start: (action) => updateStatus('🎯 Please: ' + action),
                 on_complete: (result) => {
                     if (result && result.event_session_id) {
                         sendToServer(result.event_session_id);
@@ -703,15 +769,31 @@ app.get('/liveness.html', (req, res) => {
             });
         }
         
-        setTimeout(() => {
-            if (!ozStarted) {
+        async function init() {
+            const actionsLoaded = await fetchActions();
+            if (!actionsLoaded) {
                 const btn = document.getElementById('startBtn');
                 btn.style.display = 'block';
-                btn.onclick = () => { btn.style.display = 'none'; startOzLiveness(); };
+                btn.textContent = 'Retry Loading Actions';
+                btn.onclick = () => {
+                    btn.style.display = 'none';
+                    init();
+                };
+                return;
             }
-        }, 8000);
+            
+            setTimeout(startOzLiveness, 2000);
+            
+            setTimeout(() => {
+                if (!ozStarted) {
+                    const btn = document.getElementById('startBtn');
+                    btn.style.display = 'block';
+                    btn.onclick = () => { btn.style.display = 'none'; startOzLiveness(); };
+                }
+            }, 8000);
+        }
         
-        setTimeout(startOzLiveness, 2000);
+        init();
     </script>
 </body>
 </html>
@@ -760,4 +842,6 @@ app.listen(PORT, () => {
   console.log(`   GET  /test-db`);
   console.log(`   GET  /test-update-liveness`);
   console.log(`   GET  /health`);
+  console.log(`\n⚠️  IMPORTANT: No default values are used anywhere!`);
+  console.log(`   All data must be provided by the client.`);
 });
