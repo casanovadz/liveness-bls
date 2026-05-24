@@ -1,4 +1,4 @@
-// server.js — الإصدار مع إنشاء تلقائي للمستخدم (بدون قيم افتراضية للإجراءات)
+// server.js — الإصدار المعدل (بدون إنشاء تلقائي لـ transaction_id)
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
@@ -68,13 +68,14 @@ app.get('/', (req, res) => {
   res.json({
     message: 'Liveness BLS Server is running',
     status: 'OK',
-    version: '4.0',
-    auto_create: true,
+    version: '5.0',
+    auto_create: false,
+    note: 'Server does NOT auto-create transaction_id',
     timestamp: new Date().toISOString()
   });
 });
 
-// 1. استرجاع البيانات (GET) - ✅ ينشئ المستخدم تلقائياً إذا لم يكن موجوداً
+// 1. استرجاع البيانات - لا ينشئ user_id تلقائياً
 app.get('/retrieve_data.php', (req, res) => {
   const userId = req.query.user_id;
   console.log('📥 GET /retrieve_data.php?user_id=', userId);
@@ -91,35 +92,16 @@ app.get('/retrieve_data.php', (req, res) => {
       return res.status(500).json({ error: err.message });
     }
 
-    // ✅ إذا لم يتم العثور على المستخدم، نقوم بإنشائه تلقائياً
+    // ❌ لا نقوم بإنشاء مستخدم تلقائياً
     if (!row) {
-      const newTransactionId = crypto.randomUUID ? crypto.randomUUID() : ('tx-' + Date.now() + '-' + Math.random().toString(36).substr(2, 8));
-      // ✅ لا نضع إجراءات افتراضية - نتركها فارغة
-      db.run(
-        `INSERT INTO liveness_data (user_id, transaction_id, liveness_id, spoof_ip, status, created_at)
-         VALUES (?, ?, ?, ?, 'pending', datetime('now'))`,
-        [cleanUserId, newTransactionId, 'lv-auto', '0.0.0.0'],
-        function (insertErr) {
-          if (insertErr) {
-            console.error('❌ Insert error:', insertErr);
-            return res.status(500).json({ error: insertErr.message });
-          }
-          console.log(`🆕 Auto-created user: ${cleanUserId} with transaction: ${newTransactionId}`);
-          return res.json({ 
-            user_id: cleanUserId, 
-            status: 'pending',
-            transaction_id: newTransactionId,
-            liveness_id: 'lv-auto',
-            spoof_ip: '0.0.0.0',
-            actions: null,  // ✅ لا توجد إجراءات حتى يقوم المسؤول بتعيينها
-            message: 'User created. Waiting for admin to set actions.'
-          });
-        }
-      );
-      return;
+      console.log(`❌ User ${cleanUserId} not found in database`);
+      return res.status(404).json({ 
+        error: 'User not found', 
+        user_id: cleanUserId,
+        message: 'المستخدم غير موجود. يرجى إنشاء الجلسة أولاً عبر set_actions.php'
+      });
     }
 
-    // المستخدم موجود - نعيد بياناته
     const createdAt = new Date(row.created_at);
     const elapsedMinutes = (Date.now() - createdAt.getTime()) / 60000;
 
@@ -163,7 +145,7 @@ app.get('/retrieve_data.php', (req, res) => {
   });
 });
 
-// 2. تخزين أو تحديث بيانات IP المزيف والإجراءات
+// 2. تخزين بيانات IP المزيف والإجراءات (يأخذ transaction_id من المستخدم)
 app.post('/get_ip.php', (req, res) => {
   const data = req.body;
   console.log('📤 POST /get_ip.php', data);
@@ -183,6 +165,15 @@ app.post('/get_ip.php', (req, res) => {
     return res.status(400).json({ error: 'spoof_ip is required' });
   }
 
+  // ✅ transaction_id مطلوب - لا نستخدم قيمة افتراضية
+  if (!transaction_id || transaction_id === 'auto') {
+    console.error(`❌ transaction_id is required for user ${user_id}`);
+    return res.status(400).json({ 
+      error: 'transaction_id is required',
+      message: 'يجب إرسال transaction_id صالح'
+    });
+  }
+
   // ✅ الإجراءات مطلوبة - لا نستخدم قيماً افتراضية
   if (!actions || !Array.isArray(actions) || actions.length === 0) {
     console.error(`❌ No actions provided for user ${user_id}`);
@@ -194,63 +185,37 @@ app.post('/get_ip.php', (req, res) => {
 
   const actionsJson = JSON.stringify(actions);
   console.log(`🎭 Actions received for ${user_id}:`, actions);
+  console.log(`🆔 Transaction ID received:`, transaction_id);
 
-  db.get("SELECT id FROM liveness_data WHERE user_id = ?", [user_id], (err, row) => {
-    if (err) {
-      console.error('❌ Database error:', err);
-      return res.status(500).json({ error: err.message });
+  // ✅ تحديث أو إدراج record مع transaction_id من المستخدم
+  db.run(
+    `INSERT INTO liveness_data (user_id, transaction_id, liveness_id, spoof_ip, actions, status, created_at)
+     VALUES (?, ?, ?, ?, ?, 'pending', datetime('now'))
+     ON CONFLICT(user_id) DO UPDATE SET
+       transaction_id = excluded.transaction_id,
+       liveness_id = COALESCE(excluded.liveness_id, liveness_id),
+       spoof_ip = excluded.spoof_ip,
+       actions = excluded.actions,
+       status = 'pending',
+       created_at = datetime('now')`,
+    [user_id, transaction_id, liveness_id || null, spoof_ip, actionsJson],
+    function(err) {
+      if (err) {
+        console.error('❌ Database error:', err);
+        return res.status(500).json({ error: err.message });
+      }
+      
+      console.log(`✅ Stored/Updated record for user: ${user_id} with transaction_id: ${transaction_id}`);
+      res.json({
+        success: true,
+        message: 'Data stored successfully',
+        user_id,
+        transaction_id,
+        liveness_id,
+        actions: actions
+      });
     }
-
-    if (row) {
-      db.run(
-        `UPDATE liveness_data
-         SET transaction_id = COALESCE(?, transaction_id),
-             liveness_id = COALESCE(?, liveness_id),
-             spoof_ip = ?,
-             actions = ?,
-             status = 'updated',
-             created_at = datetime('now')
-         WHERE user_id = ?`,
-        [transaction_id, liveness_id, spoof_ip, actionsJson, user_id],
-        function (updateErr) {
-          if (updateErr) {
-            console.error('❌ Update error:', updateErr);
-            return res.status(500).json({ error: updateErr.message });
-          }
-          console.log(`🔄 Updated record for user: ${user_id} with actions: ${actionsJson}`);
-          res.json({
-            success: true,
-            message: 'Data updated successfully',
-            user_id,
-            transaction_id,
-            liveness_id,
-            actions: actions
-          });
-        }
-      );
-    } else {
-      db.run(
-        `INSERT INTO liveness_data (user_id, transaction_id, liveness_id, spoof_ip, actions, status, created_at)
-         VALUES (?, ?, ?, ?, ?, 'pending', datetime('now'))`,
-        [user_id, transaction_id || 'auto', liveness_id || null, spoof_ip, actionsJson],
-        function (insertErr) {
-          if (insertErr) {
-            console.error('❌ Insert error:', insertErr);
-            return res.status(500).json({ error: insertErr.message });
-          }
-          console.log('✅ New data stored - ID:', this.lastID);
-          res.json({
-            success: true,
-            message: 'Data stored successfully',
-            user_id,
-            transaction_id,
-            liveness_id,
-            actions: actions
-          });
-        }
-      );
-    }
-  });
+  );
 });
 
 // 3. Health check
@@ -258,8 +223,8 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'OK',
     server: 'liveness-bls.onrender.com',
-    version: '4.0',
-    auto_create: true,
+    version: '5.0',
+    auto_create: false,
     timestamp: new Date().toISOString()
   });
 });
@@ -273,7 +238,7 @@ app.get('/get_actions.php', (req, res) => {
     return res.status(400).json({ error: 'user_id parameter is required' });
   }
 
-  db.get("SELECT actions FROM liveness_data WHERE user_id = ?", [userId], (err, row) => {
+  db.get("SELECT actions, transaction_id FROM liveness_data WHERE user_id = ?", [userId], (err, row) => {
     if (err) {
       console.error('❌ Database error:', err);
       return res.status(500).json({ error: err.message });
@@ -284,53 +249,98 @@ app.get('/get_actions.php', (req, res) => {
         success: false,
         error: 'No actions found for this user',
         user_id: userId,
-        message: 'لم يتم العثور على إجراءات. يرجى انتظار المسؤول.'
+        message: 'لم يتم العثور على إجراءات. يرجى إنشاء الجلسة أولاً عبر set_actions.php'
       });
     }
 
     try {
       const actions = JSON.parse(row.actions);
-      res.json({ success: true, user_id: userId, actions: actions });
+      res.json({ 
+        success: true, 
+        user_id: userId, 
+        transaction_id: row.transaction_id,
+        actions: actions 
+      });
     } catch(e) {
       res.status(500).json({ error: 'Invalid actions format' });
     }
   });
 });
 
-// 5. تحديث liveness_id بعد اكتمال التحقق
+// 5. تحديث liveness_id (يأخذ transaction_id من المستخدم)
 app.post('/update_liveness_id', (req, res) => {
   console.log('📥 POST /update_liveness_id', req.body);
   
   const { user_id, liveness_id, transaction_id, spoof_ip } = req.body;
 
-  if (!user_id || !liveness_id) {
-    return res.status(400).json({ success: false, error: 'user_id and liveness_id required' });
+  if (!user_id) {
+    return res.status(400).json({ success: false, error: 'user_id is required' });
   }
 
-  db.run(
-    `UPDATE liveness_data 
-     SET liveness_id = ?, 
-         status = 'completed',
-         transaction_id = COALESCE(?, transaction_id),
-         spoof_ip = COALESCE(?, spoof_ip)
-     WHERE user_id = ?`,
-    [liveness_id, transaction_id, spoof_ip, user_id],
-    function(err) {
-      if (err) {
-        console.error('❌ Update error:', err);
-        return res.status(500).json({ success: false, error: err.message });
-      }
-      
-      console.log(`✅ Liveness ID ${liveness_id} stored for user ${user_id}`);
-      res.json({ success: true, message: 'Liveness ID updated', status: 'completed' });
+  if (!liveness_id) {
+    return res.status(400).json({ success: false, error: 'liveness_id is required' });
+  }
+
+  // ✅ transaction_id مطلوب
+  if (!transaction_id || transaction_id === 'auto') {
+    console.error(`❌ transaction_id is required for user ${user_id}`);
+    return res.status(400).json({ 
+      success: false, 
+      error: 'transaction_id is required'
+    });
+  }
+
+  // التحقق من وجود المستخدم أولاً
+  db.get("SELECT id FROM liveness_data WHERE user_id = ?", [user_id], (err, row) => {
+    if (err) {
+      console.error('❌ Database error:', err);
+      return res.status(500).json({ success: false, error: err.message });
     }
-  );
+
+    if (!row) {
+      console.log(`❌ User ${user_id} not found in database`);
+      return res.status(404).json({ 
+        success: false, 
+        error: 'User not found. Please create session first using set_actions.php',
+        user_id: user_id
+      });
+    }
+
+    // ✅ تحديث مع transaction_id الجديد
+    db.run(
+      `UPDATE liveness_data 
+       SET liveness_id = ?, 
+           transaction_id = ?,
+           spoof_ip = COALESCE(?, spoof_ip),
+           status = 'completed',
+           created_at = datetime('now')
+       WHERE user_id = ?`,
+      [liveness_id, transaction_id, spoof_ip, user_id],
+      function(err) {
+        if (err) {
+          console.error('❌ Failed to update liveness_id:', err);
+          return res.status(500).json({ success: false, error: err.message });
+        }
+        
+        console.log(`✅ Liveness ID ${liveness_id} stored for user ${user_id} with transaction_id ${transaction_id}`);
+        
+        res.json({ 
+          success: true, 
+          message: 'Liveness ID updated successfully',
+          user_id: user_id,
+          liveness_id: liveness_id,
+          transaction_id: transaction_id,
+          status: 'completed'
+        });
+      }
+    );
+  });
 });
 
-// 6. تعيين الإجراءات (للمسؤول)
+// 6. تعيين الإجراءات (للمسؤول) - لا ينشئ transaction_id تلقائياً
 app.post('/set_actions.php', (req, res) => {
-  const { user_id, actions } = req.body;
-  console.log('📥 POST /set_actions.php', { user_id, actions });
+  const { user_id, actions, transaction_id } = req.body;
+  console.log('📥 POST /set_actions.php', { user_id, actions, transaction_id });
 
   if (!user_id) {
     return res.status(400).json({ success: false, error: 'user_id is required' });
@@ -340,24 +350,41 @@ app.post('/set_actions.php', (req, res) => {
     return res.status(400).json({ success: false, error: 'actions array is required' });
   }
 
+  // ✅ transaction_id مطلوب
+  if (!transaction_id || transaction_id === 'auto') {
+    console.error(`❌ transaction_id is required for user ${user_id}`);
+    return res.status(400).json({ 
+      success: false, 
+      error: 'transaction_id is required',
+      message: 'يجب إرسال transaction_id صالح'
+    });
+  }
+
   const actionsJson = JSON.stringify(actions);
 
   db.run(
-    `INSERT INTO liveness_data (user_id, actions, status, created_at)
-     VALUES (?, ?, 'pending', datetime('now'))
+    `INSERT INTO liveness_data (user_id, transaction_id, actions, status, created_at)
+     VALUES (?, ?, ?, 'pending', datetime('now'))
      ON CONFLICT(user_id) DO UPDATE SET
+       transaction_id = excluded.transaction_id,
        actions = excluded.actions,
        status = 'pending',
        created_at = datetime('now')`,
-    [user_id, actionsJson],
+    [user_id, transaction_id, actionsJson],
     function(err) {
       if (err) {
         console.error('❌ Failed to set actions:', err);
         return res.status(500).json({ success: false, error: err.message });
       }
       
-      console.log(`✅ Actions set for user ${user_id}:`, actions);
-      res.json({ success: true, message: 'Actions set successfully', user_id, actions });
+      console.log(`✅ Actions set for user ${user_id} with transaction_id ${transaction_id}:`, actions);
+      res.json({ 
+        success: true, 
+        message: 'Actions set successfully',
+        user_id: user_id,
+        transaction_id: transaction_id,
+        actions: actions
+      });
     }
   );
 });
@@ -378,6 +405,20 @@ app.get('/debug_all', (req, res) => {
 // 8. صفحة liveness.html
 app.get('/liveness.html', (req, res) => {
   const userId = req.query.user_id;
+  
+  if (!userId) {
+    return res.status(400).send(`
+      <!DOCTYPE html>
+      <html>
+      <head><meta charset="UTF-8"><title>Error</title></head>
+      <body style="font-family:Arial;text-align:center;padding:50px;">
+        <h1>❌ Error</h1>
+        <p>Missing user_id parameter</p>
+      </body>
+      </html>
+    `);
+  }
+
   res.send(`
 <!DOCTYPE html>
 <html>
@@ -389,55 +430,61 @@ app.get('/liveness.html', (req, res) => {
         .container { max-width: 500px; margin: 0 auto; background: #2d2d2d; padding: 30px; border-radius: 15px; }
         .spinner { width: 40px; height: 40px; border: 4px solid #f3f3f3; border-top: 4px solid #28a745; border-radius: 50%; animation: spin 1s linear infinite; margin: 20px auto; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-        .status { margin-top: 20px; padding: 10px; border-radius: 8px; }
     </style>
     <script src="https://web-sdk.prod.cdn.spain.ozforensics.com/blsinternational/plugin_liveness.php"></script>
 </head>
 <body>
     <div class="container">
         <h1>📸 Liveness Verification</h1>
-        <p>User ID: ${userId || 'Not specified'}</p>
+        <p>User ID: ${userId}</p>
         <div class="spinner" id="spinner"></div>
-        <div class="status" id="status">🔄 Loading actions from server...</div>
+        <div id="status">🔄 Loading...</div>
     </div>
     <script>
-        const userId = "${userId || ''}";
+        const userId = "${userId}";
         const UPDATE_URL = "https://liveness-bls.onrender.com/update_liveness_id";
-        const GET_ACTIONS_URL = "https://liveness-bls.onrender.com/get_actions.php?user_id=" + userId;
+        const GET_DATA_URL = "https://liveness-bls.onrender.com/retrieve_data.php?user_id=" + userId;
         
-        async function fetchActions() {
+        async function getData() {
             try {
-                const response = await fetch(GET_ACTIONS_URL);
+                const response = await fetch(GET_DATA_URL);
                 if (response.status === 404) {
-                    document.getElementById('status').innerHTML = '⏳ Waiting for admin to configure...';
-                    setTimeout(fetchActions, 3000);
+                    document.getElementById('status').innerHTML = '⏳ Waiting for session...';
+                    setTimeout(getData, 3000);
                     return;
                 }
                 const data = await response.json();
-                if (data.success && data.actions) {
-                    startLiveness(data.actions);
+                if (data.actions && data.transaction_id) {
+                    startLiveness(data.actions, data.transaction_id);
                 } else {
-                    setTimeout(fetchActions, 3000);
+                    setTimeout(getData, 3000);
                 }
             } catch(e) {
-                setTimeout(fetchActions, 3000);
+                setTimeout(getData, 3000);
             }
         }
         
-        function startLiveness(actions) {
+        function startLiveness(actions, transactionId) {
             document.getElementById('spinner').style.display = 'none';
             document.getElementById('status').innerHTML = '🎥 Starting camera...';
             
             OzLiveness.open({
                 lang: 'en',
-                meta: { user_id: userId, transaction_id: 'liveness-' + Date.now() },
+                meta: { 
+                    user_id: userId, 
+                    transaction_id: transactionId
+                },
                 action: actions,
                 on_complete: async (result) => {
                     if (result?.event_session_id) {
                         await fetch(UPDATE_URL, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ user_id: userId, liveness_id: result.event_session_id })
+                            body: JSON.stringify({ 
+                                user_id: userId, 
+                                liveness_id: result.event_session_id,
+                                transaction_id: transactionId
+                            })
                         });
                         document.getElementById('status').innerHTML = '✅ Verification complete!';
                         setTimeout(() => window.close(), 2000);
@@ -449,11 +496,19 @@ app.get('/liveness.html', (req, res) => {
             });
         }
         
-        fetchActions();
+        getData();
     </script>
 </body>
 </html>
   `);
+});
+
+// 9. اختبار قاعدة البيانات
+app.get('/test-db', (req, res) => {
+  db.get("SELECT COUNT(*) as count FROM liveness_data", [], (err, row) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ success: true, recordCount: row.count, timestamp: Date.now() });
+  });
 });
 
 // تنظيف تلقائي
@@ -466,6 +521,7 @@ setInterval(() => {
 // بدء الخادم
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`✅ Auto-create users: ENABLED`);
+  console.log(`❌ Auto-create users: DISABLED`);
+  console.log(`✅ Server uses transaction_id from client ONLY`);
   console.log(`📍 Health: http://localhost:${PORT}/health`);
 });
