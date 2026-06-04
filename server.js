@@ -1,4 +1,4 @@
-// server.js — الإصدار المعدل (بدون إنشاء تلقائي لـ transaction_id)
+// server.js — الإصدار المعدل (يقبل spoof_ip في set_actions.php)
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
@@ -68,9 +68,9 @@ app.get('/', (req, res) => {
   res.json({
     message: 'Liveness BLS Server is running',
     status: 'OK',
-    version: '5.0',
+    version: '5.1',
     auto_create: false,
-    note: 'Server does NOT auto-create transaction_id',
+    note: 'Server accepts spoof_ip in set_actions.php',
     timestamp: new Date().toISOString()
   });
 });
@@ -92,7 +92,6 @@ app.get('/retrieve_data.php', (req, res) => {
       return res.status(500).json({ error: err.message });
     }
 
-    // ❌ لا نقوم بإنشاء مستخدم تلقائياً
     if (!row) {
       console.log(`❌ User ${cleanUserId} not found in database`);
       return res.status(404).json({ 
@@ -165,7 +164,6 @@ app.post('/get_ip.php', (req, res) => {
     return res.status(400).json({ error: 'spoof_ip is required' });
   }
 
-  // ✅ transaction_id مطلوب - لا نستخدم قيمة افتراضية
   if (!transaction_id || transaction_id === 'auto') {
     console.error(`❌ transaction_id is required for user ${user_id}`);
     return res.status(400).json({ 
@@ -174,7 +172,6 @@ app.post('/get_ip.php', (req, res) => {
     });
   }
 
-  // ✅ الإجراءات مطلوبة - لا نستخدم قيماً افتراضية
   if (!actions || !Array.isArray(actions) || actions.length === 0) {
     console.error(`❌ No actions provided for user ${user_id}`);
     return res.status(400).json({ 
@@ -187,7 +184,6 @@ app.post('/get_ip.php', (req, res) => {
   console.log(`🎭 Actions received for ${user_id}:`, actions);
   console.log(`🆔 Transaction ID received:`, transaction_id);
 
-  // ✅ تحديث أو إدراج record مع transaction_id من المستخدم
   db.run(
     `INSERT INTO liveness_data (user_id, transaction_id, liveness_id, spoof_ip, actions, status, created_at)
      VALUES (?, ?, ?, ?, ?, 'pending', datetime('now'))
@@ -205,7 +201,7 @@ app.post('/get_ip.php', (req, res) => {
         return res.status(500).json({ error: err.message });
       }
       
-      console.log(`✅ Stored/Updated record for user: ${user_id} with transaction_id: ${transaction_id}`);
+      console.log(`✅ Stored/Updated record for user: ${user_id} with transaction_id: ${transaction_id}, spoof_ip: ${spoof_ip}`);
       res.json({
         success: true,
         message: 'Data stored successfully',
@@ -223,7 +219,7 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'OK',
     server: 'liveness-bls.onrender.com',
-    version: '5.0',
+    version: '5.1',
     auto_create: false,
     timestamp: new Date().toISOString()
   });
@@ -238,7 +234,7 @@ app.get('/get_actions.php', (req, res) => {
     return res.status(400).json({ error: 'user_id parameter is required' });
   }
 
-  db.get("SELECT actions, transaction_id FROM liveness_data WHERE user_id = ?", [userId], (err, row) => {
+  db.get("SELECT actions, transaction_id, spoof_ip FROM liveness_data WHERE user_id = ?", [userId], (err, row) => {
     if (err) {
       console.error('❌ Database error:', err);
       return res.status(500).json({ error: err.message });
@@ -259,6 +255,7 @@ app.get('/get_actions.php', (req, res) => {
         success: true, 
         user_id: userId, 
         transaction_id: row.transaction_id,
+        spoof_ip: row.spoof_ip,
         actions: actions 
       });
     } catch(e) {
@@ -281,7 +278,6 @@ app.post('/update_liveness_id', (req, res) => {
     return res.status(400).json({ success: false, error: 'liveness_id is required' });
   }
 
-  // ✅ transaction_id مطلوب
   if (!transaction_id || transaction_id === 'auto') {
     console.error(`❌ transaction_id is required for user ${user_id}`);
     return res.status(400).json({ 
@@ -290,7 +286,6 @@ app.post('/update_liveness_id', (req, res) => {
     });
   }
 
-  // التحقق من وجود المستخدم أولاً
   db.get("SELECT id FROM liveness_data WHERE user_id = ?", [user_id], (err, row) => {
     if (err) {
       console.error('❌ Database error:', err);
@@ -306,7 +301,6 @@ app.post('/update_liveness_id', (req, res) => {
       });
     }
 
-    // ✅ تحديث مع transaction_id الجديد
     db.run(
       `UPDATE liveness_data 
        SET liveness_id = ?, 
@@ -322,7 +316,7 @@ app.post('/update_liveness_id', (req, res) => {
           return res.status(500).json({ success: false, error: err.message });
         }
         
-        console.log(`✅ Liveness ID ${liveness_id} stored for user ${user_id} with transaction_id ${transaction_id}`);
+        console.log(`✅ Liveness ID ${liveness_id} stored for user ${user_id} with transaction_id ${transaction_id}, spoof_ip=${spoof_ip || 'none'}`);
         
         res.json({ 
           success: true, 
@@ -330,6 +324,7 @@ app.post('/update_liveness_id', (req, res) => {
           user_id: user_id,
           liveness_id: liveness_id,
           transaction_id: transaction_id,
+          spoof_ip: spoof_ip,
           status: 'completed'
         });
       }
@@ -337,10 +332,10 @@ app.post('/update_liveness_id', (req, res) => {
   });
 });
 
-// 6. تعيين الإجراءات (للمسؤول) - لا ينشئ transaction_id تلقائياً
+// 6. تعيين الإجراءات (للمسؤول) - معدل لقبول spoof_ip
 app.post('/set_actions.php', (req, res) => {
-  const { user_id, actions, transaction_id } = req.body;
-  console.log('📥 POST /set_actions.php', { user_id, actions, transaction_id });
+  const { user_id, actions, transaction_id, spoof_ip } = req.body;
+  console.log('📥 POST /set_actions.php', { user_id, actions, transaction_id, spoof_ip });
 
   if (!user_id) {
     return res.status(400).json({ success: false, error: 'user_id is required' });
@@ -350,7 +345,6 @@ app.post('/set_actions.php', (req, res) => {
     return res.status(400).json({ success: false, error: 'actions array is required' });
   }
 
-  // ✅ transaction_id مطلوب
   if (!transaction_id || transaction_id === 'auto') {
     console.error(`❌ transaction_id is required for user ${user_id}`);
     return res.status(400).json({ 
@@ -363,27 +357,29 @@ app.post('/set_actions.php', (req, res) => {
   const actionsJson = JSON.stringify(actions);
 
   db.run(
-    `INSERT INTO liveness_data (user_id, transaction_id, actions, status, created_at)
-     VALUES (?, ?, ?, 'pending', datetime('now'))
+    `INSERT INTO liveness_data (user_id, transaction_id, actions, spoof_ip, status, created_at)
+     VALUES (?, ?, ?, ?, 'pending', datetime('now'))
      ON CONFLICT(user_id) DO UPDATE SET
        transaction_id = excluded.transaction_id,
        actions = excluded.actions,
+       spoof_ip = COALESCE(excluded.spoof_ip, spoof_ip),
        status = 'pending',
        created_at = datetime('now')`,
-    [user_id, transaction_id, actionsJson],
+    [user_id, transaction_id, actionsJson, spoof_ip || null],
     function(err) {
       if (err) {
         console.error('❌ Failed to set actions:', err);
         return res.status(500).json({ success: false, error: err.message });
       }
       
-      console.log(`✅ Actions set for user ${user_id} with transaction_id ${transaction_id}:`, actions);
+      console.log(`✅ Actions set for user ${user_id} with transaction_id ${transaction_id}, spoof_ip=${spoof_ip || 'none'}`);
       res.json({ 
         success: true, 
         message: 'Actions set successfully',
         user_id: user_id,
         transaction_id: transaction_id,
-        actions: actions
+        actions: actions,
+        spoof_ip: spoof_ip
       });
     }
   );
@@ -523,5 +519,6 @@ app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`❌ Auto-create users: DISABLED`);
   console.log(`✅ Server uses transaction_id from client ONLY`);
+  console.log(`✅ Server accepts spoof_ip in set_actions.php`);
   console.log(`📍 Health: http://localhost:${PORT}/health`);
 });
